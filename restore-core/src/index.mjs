@@ -49,6 +49,7 @@ const STARTUP_LOGOS = [
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const APP_ROOT = path.resolve(__dirname, '..')
+const PROMPT = '\x1b[38;5;245m>\x1b[0m '
 
 function pickRandom(list) {
   return list[Math.floor(Math.random() * list.length)]
@@ -222,7 +223,7 @@ async function main() {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: 'assistant> ',
+    prompt: PROMPT,
   })
   let isClosed = false
   const safePrompt = () => {
