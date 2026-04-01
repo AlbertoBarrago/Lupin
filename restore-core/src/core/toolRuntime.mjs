@@ -22,6 +22,11 @@ export class ToolRuntime {
     return this.workspaceContext
   }
 
+  refreshWorkspaceContext() {
+    this.workspaceContext = buildWorkspaceContext(this.projectRoot)
+    return this.workspaceContext
+  }
+
   async execute(toolName, args = {}) {
     const tool = this.tools.get(toolName)
     if (!tool) {

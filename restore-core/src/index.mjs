@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import fs from 'node:fs'
 import readline from 'node:readline'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,6 +14,11 @@ import { FileReadTool } from './tools/FileReadTool.mjs'
 import { FileWriteTool } from './tools/FileWriteTool.mjs'
 import { GlobTool } from './tools/GlobTool.mjs'
 import { GrepTool } from './tools/GrepTool.mjs'
+import {
+  formatWorkspaceSnapshot,
+  initWorkspace,
+  renderClaudeMd,
+} from './core/workspaceInit.mjs'
 import {
   ambientLine,
   applyAction,
@@ -58,6 +64,7 @@ function printHelp() {
       '/help                       Show this help',
       '/exit                       Exit',
       '/status                     Show model/workspace status',
+      '/init                       Analyze workspace and create/update MELKY.md',
       '/model [name]               Get or set Ollama model',
       '/health                     Check Ollama connectivity',
       '/mode [code|chat|auto]      Get or set interaction mode',
@@ -218,6 +225,7 @@ async function main() {
 
   let queue = Promise.resolve()
   let mode = config.agent.defaultMode
+  let currentWorkspaceContext = workspaceContext
 
   rl.on('line', line => {
     queue = queue
@@ -246,15 +254,33 @@ async function main() {
 
         if (input === '/status') {
           console.log(`Workspace: ${config.projectRoot}`)
-          console.log(`Git root: ${workspaceContext.gitRoot || 'not detected'}`)
+          console.log(`Git root: ${currentWorkspaceContext.gitRoot || 'not detected'}`)
           console.log(`Ollama URL: ${model.baseUrl}`)
           console.log(`Model: ${model.model}`)
           console.log(`Max steps: ${config.agent.maxSteps}`)
           console.log(`Mode: ${mode}`)
+          const snapshot = sessionStore.getWorkspaceSnapshot()
+          if (snapshot) {
+            console.log(formatWorkspaceSnapshot(snapshot))
+          }
           const mg = tickCompanion(sessionStore.getMgCompanion())
           sessionStore.setMgCompanion(mg)
           console.log(`MG: ${mg ? `${mg.name} (${mg.species}, lvl ${mg.level})` : 'not hatched'}`)
           await sessionStore.save()
+          safePrompt()
+          return
+        }
+
+        if (input === '/init') {
+          const snapshot = initWorkspace(config.projectRoot, currentWorkspaceContext)
+          const melkyMdPath = path.join(config.projectRoot, 'MELKY.md')
+          const melkyMdContent = renderClaudeMd(snapshot)
+          await fs.promises.writeFile(melkyMdPath, melkyMdContent + '\n', 'utf8')
+          sessionStore.setWorkspaceSnapshot(snapshot)
+          currentWorkspaceContext = toolRuntime.refreshWorkspaceContext()
+          await sessionStore.save()
+          console.log(`Initialized workspace instructions: ${melkyMdPath}`)
+          console.log(formatWorkspaceSnapshot(snapshot))
           safePrompt()
           return
         }

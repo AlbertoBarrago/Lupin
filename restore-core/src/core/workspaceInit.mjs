@@ -24,6 +24,44 @@ function listDirNames(projectRoot) {
   }
 }
 
+function listTopLevelFiles(projectRoot) {
+  try {
+    return fs
+      .readdirSync(projectRoot, { withFileTypes: true })
+      .filter(entry => entry.isFile())
+      .map(entry => entry.name)
+  } catch {
+    return []
+  }
+}
+
+function hasFileExtension(projectRoot, extensions) {
+  const queue = [projectRoot]
+  while (queue.length > 0) {
+    const current = queue.shift()
+    let entries = []
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.idea') {
+        continue
+      }
+      const fullPath = path.join(current, entry.name)
+      if (entry.isDirectory()) {
+        queue.push(fullPath)
+        continue
+      }
+      if (extensions.some(extension => entry.name.endsWith(extension))) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
 function detectPackageManager(projectRoot) {
   if (exists(projectRoot, 'pnpm-lock.yaml')) return 'pnpm'
   if (exists(projectRoot, 'yarn.lock')) return 'yarn'
@@ -41,6 +79,12 @@ function detectStacks(projectRoot, packageJson) {
 
   if (exists(projectRoot, 'package.json')) stacks.push('node')
   if (exists(projectRoot, 'tsconfig.json')) stacks.push('typescript')
+  if (!stacks.includes('typescript') && hasFileExtension(projectRoot, ['.ts', '.tsx'])) {
+    stacks.push('typescript')
+  }
+  if (hasFileExtension(projectRoot, ['.tsx', '.jsx'])) {
+    stacks.push('react-style-ui')
+  }
   if (exists(projectRoot, 'pyproject.toml') || exists(projectRoot, 'requirements.txt')) stacks.push('python')
   if (exists(projectRoot, 'Cargo.toml')) stacks.push('rust')
   if (exists(projectRoot, 'go.mod')) stacks.push('go')
@@ -84,6 +128,12 @@ function collectEntryCandidates(projectRoot) {
   return candidates.filter(relPath => exists(projectRoot, relPath)).slice(0, 12)
 }
 
+function collectTopLevelTypeScriptEntries(projectRoot) {
+  return listTopLevelFiles(projectRoot)
+    .filter(name => /\.(ts|tsx|js|jsx)$/.test(name))
+    .slice(0, 12)
+}
+
 function summarizeScripts(packageJson) {
   const scripts = packageJson?.scripts || {}
   const interesting = ['dev', 'start', 'build', 'test', 'lint']
@@ -101,25 +151,28 @@ function summarizeDirectories(projectRoot) {
 export function initWorkspace(projectRoot, workspaceContext) {
   const resolvedRoot = path.resolve(projectRoot)
   const packageJson = safeReadJson(path.join(resolvedRoot, 'package.json'))
+  const entryCandidates = collectEntryCandidates(resolvedRoot)
+  const topLevelEntries = collectTopLevelTypeScriptEntries(resolvedRoot)
   const snapshot = {
     createdAt: new Date().toISOString(),
     workspaceRoot: resolvedRoot,
     gitRoot: workspaceContext.gitRoot,
     packageManager: detectPackageManager(resolvedRoot),
     stacks: detectStacks(resolvedRoot, packageJson),
-    entryCandidates: collectEntryCandidates(resolvedRoot),
+    entryCandidates: entryCandidates.length ? entryCandidates : topLevelEntries,
     keyDirectories: summarizeDirectories(resolvedRoot),
     scripts: summarizeScripts(packageJson),
     markers: workspaceContext.markers,
+    topLevelEntries: workspaceContext.topLevel.slice(0, 12),
   }
   return snapshot
 }
 
 export function renderClaudeMd(snapshot) {
   const lines = [
-    '# CLAUDE.md',
+    '# MELKY.md',
     '',
-    'This file provides guidance to restore-core when working with code in this repository.',
+    'This file provides guidance to coding agents working in this repository.',
     '',
   ]
 
@@ -147,12 +200,16 @@ export function renderClaudeMd(snapshot) {
   if (snapshot.markers.length) {
     lines.push(`- Important root markers: ${snapshot.markers.join(', ')}`)
   }
+  if (snapshot.topLevelEntries.length) {
+    lines.push(`- Top-level workspace view: ${snapshot.topLevelEntries.join(', ')}`)
+  }
   lines.push('')
 
   lines.push('## Working Rules', '')
   lines.push('- Stay within the current workspace root unless explicitly asked otherwise.')
   lines.push('- Inspect files before making claims about implementation details.')
   lines.push('- Prefer repo-native scripts and conventions over generic defaults.')
+  lines.push('- For architecture questions, start from entry files and top-level directories before diving into implementation details.')
   lines.push('')
 
   return lines.join('\n')

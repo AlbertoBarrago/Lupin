@@ -51,6 +51,7 @@ ollama pull llama3.2
 Then in the agent:
 
 - `/health`
+- `/init` to create a workspace-local `MELKY.md`
 - `/model qwen2.5-coder:7b` (optional)
 - `/mode code` (default)
 - `/code inspect this repository and list key entry files`
@@ -69,6 +70,8 @@ Direct inspection commands (no planner required):
 - `/read <path>`
 - `/grep <pattern> [--path <path>]`
 - `/bash <command>`
+
+`/init` analyzes the current workspace, stores a local snapshot for that workspace, and writes a minimal `MELKY.md` so future sessions start with project-specific instructions.
 
 ## Environment variables
 

@@ -51,7 +51,7 @@ export function buildWorkspaceContext(projectRoot) {
     'README.md',
   ].filter(name => fs.existsSync(path.join(resolvedRoot, name)))
 
-  const instructionCandidates = ['CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md']
+  const instructionCandidates = ['MELKY.md', 'CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md']
     .map(relPath => {
       const absPath = path.join(resolvedRoot, relPath)
       const content = readTextFile(absPath)
