@@ -131,18 +131,43 @@ function normalizeUserInput(text) {
     .trim()
 }
 
+function shouldShowAmbientLine(responseKind) {
+  if (responseKind === 'chat') return false
+  return true
+}
+
+function detectGreetingLanguage(text) {
+  const value = String(text || '').trim().toLowerCase()
+  if (
+    /^(ciao|salve|ehi|hey|hola|buond[iì]|buonasera|buongiorno)([!. ]|$)/i.test(value)
+  ) {
+    return 'it'
+  }
+  if (/^(hi|hello|hey|yo|sup)([!. ]|$)/i.test(value)) {
+    return 'en'
+  }
+  return null
+}
+
+function buildGreetingReply(text) {
+  const lang = detectGreetingLanguage(text)
+  if (lang === 'it') return 'Ciao. Dimmi pure cosa ti serve.'
+  if (lang === 'en') return 'Hey. Tell me what you need.'
+  return null
+}
+
 async function runChatReply(model, sessionStore, prompt, maxHistory) {
-  const history = sessionStore.getModelHistory(maxHistory)
+  const history = sessionStore.getModelHistory(maxHistory, { kinds: ['chat'] })
   const messages = [
     {
       role: 'system',
       content:
-        'You are a concise assistant in a coding CLI. Answer clearly and practically in the user language.',
+        'You are Lupin in chat mode inside a coding CLI. Answer clearly, directly, and practically in the user language. Be natural and conversational, not robotic. For simple greetings or casual messages, reply warmly and continue the conversation with one useful follow-up. Do not roleplay as a game, menu, or interactive fiction system. Do not emit help menus unless the user explicitly asks for help with commands. Keep replies concise, but avoid flat one-liners that add no value.',
     },
     ...history,
     { role: 'user', content: prompt },
   ]
-  return model.chat(messages, { options: { temperature: 0.4 } })
+  return model.chat(messages, { options: { temperature: 0.55 } })
 }
 
 function renderDirectToolResult(payload) {
@@ -246,8 +271,6 @@ async function main() {
           safePrompt()
           return
         }
-
-        sessionStore.append('user', input)
 
         if (input === '/help') {
           printHelp()
@@ -380,19 +403,20 @@ async function main() {
             safePrompt()
             return
           }
+          sessionStore.appendWithMeta('user', prompt, { kind: 'chat', mode: 'chat' })
           const answer = await runChatReply(
             model,
             sessionStore,
             prompt,
             config.agent.maxHistory,
           )
-          sessionStore.append('assistant', answer)
+          sessionStore.appendWithMeta('assistant', answer, { kind: 'chat', mode: 'chat' })
           const mgTicked = tickCompanion(sessionStore.getMgCompanion())
           sessionStore.setMgCompanion(mgTicked)
           await sessionStore.save()
           console.log(answer)
           const extra = ambientLine(sessionStore.getMgCompanion())
-          if (extra && Math.random() < 0.35) {
+          if (shouldShowAmbientLine('chat') && extra && Math.random() < 0.35) {
             console.log(`[mg] ${extra}`)
           }
           await sessionStore.save()
@@ -563,33 +587,56 @@ async function main() {
         }
 
         let answer
+        let responseKind = 'code'
         if (input.startsWith('/code ')) {
+          sessionStore.appendWithMeta('user', task, { kind: 'code', mode: 'code' })
           const history = sessionStore.getModelHistory(config.agent.maxHistory)
           const result = await queryEngine.runTask(task, history)
           answer = result.answer
+          sessionStore.appendWithMeta('assistant', answer, { kind: 'code', mode: 'code' })
         } else if (mode === 'chat') {
-          answer = await runChatReply(model, sessionStore, task, config.agent.maxHistory)
+          sessionStore.appendWithMeta('user', task, { kind: 'chat', mode: 'chat' })
+          answer =
+            buildGreetingReply(task) ||
+            (await runChatReply(model, sessionStore, task, config.agent.maxHistory))
+          sessionStore.appendWithMeta('assistant', answer, { kind: 'chat', mode: 'chat' })
+          responseKind = 'chat'
         } else if (mode === 'auto') {
           if (detectCodingIntent(task)) {
+            sessionStore.appendWithMeta('user', task, { kind: 'code', mode: 'auto' })
             const history = sessionStore.getModelHistory(config.agent.maxHistory)
             const result = await queryEngine.runTask(task, history)
             answer = result.answer
+            sessionStore.appendWithMeta('assistant', answer, { kind: 'code', mode: 'auto' })
           } else {
-            answer = await runChatReply(model, sessionStore, task, config.agent.maxHistory)
+            sessionStore.appendWithMeta('user', task, { kind: 'chat', mode: 'auto' })
+            answer =
+              buildGreetingReply(task) ||
+              (await runChatReply(model, sessionStore, task, config.agent.maxHistory))
+            sessionStore.appendWithMeta('assistant', answer, { kind: 'chat', mode: 'auto' })
+            responseKind = 'chat'
           }
         } else {
-          const history = sessionStore.getModelHistory(config.agent.maxHistory)
-          const result = await queryEngine.runTask(task, history)
-          answer = result.answer
+          const greetingReply = buildGreetingReply(task)
+          if (greetingReply) {
+            sessionStore.appendWithMeta('user', task, { kind: 'chat', mode: 'code' })
+            answer = greetingReply
+            sessionStore.appendWithMeta('assistant', answer, { kind: 'chat', mode: 'code' })
+            responseKind = 'chat'
+          } else {
+            sessionStore.appendWithMeta('user', task, { kind: 'code', mode: 'code' })
+            const history = sessionStore.getModelHistory(config.agent.maxHistory)
+            const result = await queryEngine.runTask(task, history)
+            answer = result.answer
+            sessionStore.appendWithMeta('assistant', answer, { kind: 'code', mode: 'code' })
+          }
         }
-
-        sessionStore.append('assistant', answer)
         const mgTicked = tickCompanion(sessionStore.getMgCompanion())
         sessionStore.setMgCompanion(mgTicked)
         await sessionStore.save()
         console.log(answer)
         const extra = ambientLine(sessionStore.getMgCompanion())
-        if (extra && Math.random() < 0.35) {
+        if (shouldShowAmbientLine(responseKind) && extra && Math.random() < 0.35) {
           console.log(`[mg] ${extra}`)
         }
         await sessionStore.save()

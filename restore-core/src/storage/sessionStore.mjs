@@ -50,9 +50,15 @@ export class SessionStore {
   }
 
   append(role, content) {
+    this.appendWithMeta(role, content, {})
+  }
+
+  appendWithMeta(role, content, meta = {}) {
     this.state.conversation.push({
       role,
       content,
+      kind: meta.kind || 'generic',
+      mode: meta.mode || null,
       at: new Date().toISOString(),
     })
     if (this.state.conversation.length > 400) {
@@ -76,9 +82,17 @@ export class SessionStore {
     this.state.mgCompanion = value ?? null
   }
 
-  getModelHistory(limit = 16) {
+  getModelHistory(limit = 16, options = {}) {
+    const allowedKinds = Array.isArray(options.kinds) && options.kinds.length
+      ? new Set(options.kinds)
+      : null
+
     return this.state.conversation
       .filter(item => item.role === 'user' || item.role === 'assistant')
+      .filter(item => {
+        if (!allowedKinds) return true
+        return allowedKinds.has(item.kind || 'generic')
+      })
       .slice(-limit)
       .map(item => ({
         role: item.role,
