@@ -71,11 +71,11 @@ function xpToNext(level) {
   return 100 + Math.max(0, level - 1) * 20
 }
 
-export function hatchCompanion(name = 'Melky', seedSource = 'local-user') {
+export function hatchCompanion(name = 'Lupin', seedSource = 'local-user') {
   const seed = `${seedSource}:${Date.now()}:${Math.random()}`
   const rng = mulberry32(hashString(seed))
   return {
-    name: String(name || 'Melky').slice(0, 28),
+    name: String(name || 'Lupin').slice(0, 28),
     species: pick(rng, SPECIES),
     rarity: rollRarity(rng),
     personality: pick(rng, PERSONALITIES),

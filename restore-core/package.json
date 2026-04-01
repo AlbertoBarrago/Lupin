@@ -1,11 +1,10 @@
 {
-  "name": "restore-core-agent",
+  "name": "lupin-agent",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "melchiorre": "src/index.mjs",
-    "melky": "src/index.mjs",
+    "lupin": "src/index.mjs",
     "restore-core": "src/index.mjs"
   },
   "scripts": {

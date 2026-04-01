@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Lupin Mark Badge</title>
+  <desc id="desc">Circular badge with a gentleman thief profile and gold-red palette.</desc>
+  <defs>
+    <linearGradient id="ring" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f0c96b"/>
+      <stop offset="100%" stop-color="#af761b"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="64" fill="#171717"/>
+  <circle cx="256" cy="256" r="180" fill="#111"/>
+  <circle cx="256" cy="256" r="168" fill="none" stroke="url(#ring)" stroke-width="16"/>
+  <path d="M138 208c35-41 83-61 145-61 46 0 90 10 132 31-21 4-40 10-56 18-24-8-47-12-72-12-55 0-104 11-149 34v-10Z" fill="#f0c96b"/>
+  <path d="M127 240c53-25 107-37 161-37 57 0 103 11 139 34-22 5-42 13-59 25-22-7-46-10-71-10-58 0-114 17-170 52v-64Z" fill="#f4d37d"/>
+  <path d="M355 229c-40 13-70 36-90 71 29-14 57-21 85-21 40 0 75 13 106 40-18 17-38 31-61 42-15-19-35-28-59-28-35 0-65 19-89 57h-60c11-48 33-89 67-123 33-33 67-46 101-38Z" fill="#f5efe2"/>
+  <path d="M245 269c20-18 43-27 71-27 18 0 37 4 56 11-17 11-40 17-67 17-24 0-44-1-60-1Z" fill="#171717"/>
+  <circle cx="279" cy="248" r="6" fill="#d2a23f"/>
+  <path d="M177 359c25-19 51-29 80-29 24 0 47 6 69 19-17 13-33 28-49 47-27-10-60-16-100-16Z" fill="#bd2232"/>
+</svg>

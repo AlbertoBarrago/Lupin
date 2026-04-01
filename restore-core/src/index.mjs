@@ -17,7 +17,7 @@ import { GrepTool } from './tools/GrepTool.mjs'
 import {
   formatWorkspaceSnapshot,
   initWorkspace,
-  renderClaudeMd,
+  renderLupinMd,
 } from './core/workspaceInit.mjs'
 import {
   ambientLine,
@@ -29,23 +29,20 @@ import {
   tickCompanion,
 } from './mg/companion.mjs'
 
-const STARTUP_NAMES = ['Milchiorre', 'Pipponzio', 'Ubalduino', 'Gervasione', 'Tartaglione']
 const STARTUP_LOGOS = [
   [
-    '+----------------------------------+',
-    '| __  __ ___ _     ___ _   _  ___  |',
-    '||  \\/  |_ _| |   / __| | | |/ _ \\ |',
-    '|| |\\/| || || |__| (__| |_| |  __/ |',
-    '||_|  |_|___|_____\\___|\\__,_|\\___| |',
-    '+----------------------------------+',
+    ' _    _   _ ____ ___ _   _ ',
+    '| |  | | | |  _ \\_ _| \\ | |',
+    '| |  | | | | |_) | ||  \\| |',
+    '| |__| |_| |  __/| || |\\  |',
+    '|_____\\___/|_|  |___|_| \\_|',
   ].join('\n'),
   [
-    '+----------------------------------+',
-    '|  __  __ ___ _    ___ _  _  ___   |',
-    '| |  \\/  |_ _| |  / __| || |/ _ \\  |',
-    '| | |\\/| || || |_| (__| __ | (_) | |',
-    '| |_|  |_|___|____\\___|_||_|\\___/  |',
-    '+----------------------------------+',
+    ' _    _   _ ____ ___ _   _   CLI ',
+    '| |  | | | |  _ \\_ _| \\ | | / _ \\',
+    '| |  | | | | |_) | ||  \\| || | | |',
+    '| |__| |_| |  __/| || |\\  || |_| |',
+    '|_____\\___/|_|  |___|_| \\_| \\___/ ',
   ].join('\n'),
 ]
 
@@ -64,7 +61,8 @@ function printHelp() {
       '/help                       Show this help',
       '/exit                       Exit',
       '/status                     Show model/workspace status',
-      '/init                       Analyze workspace and create/update MELKY.md',
+      '/context                    Show repo context and loaded instruction files',
+      '/init                       Analyze workspace and create/update LUPIN.md',
       '/model [name]               Get or set Ollama model',
       '/health                     Check Ollama connectivity',
       '/mode [code|chat|auto]      Get or set interaction mode',
@@ -181,7 +179,6 @@ function parseGrepInput(raw) {
 
 async function main() {
   const config = loadConfig()
-  const startupName = pickRandom(STARTUP_NAMES)
   const startupLogo = pickRandom(STARTUP_LOGOS)
 
   const model = new OllamaAdapter(config.ollama)
@@ -202,7 +199,7 @@ async function main() {
   const workspaceContext = toolRuntime.getWorkspaceContext()
 
   console.log(startupLogo)
-  console.log(`${startupName} // restore-core coding agent`)
+  console.log('Lupin // local coding agent')
   console.log(`Workspace: ${config.projectRoot}`)
   console.log(`Git root: ${workspaceContext.gitRoot || 'not detected'}`)
   console.log(`Ollama: ${config.ollama.baseUrl} | model: ${config.ollama.model}`)
@@ -271,15 +268,49 @@ async function main() {
           return
         }
 
+        if (input === '/context') {
+          console.log(`Workspace: ${config.projectRoot}`)
+          console.log(`Git root: ${currentWorkspaceContext.gitRoot || 'not detected'}`)
+          console.log(
+            `Markers: ${
+              currentWorkspaceContext.markers.length
+                ? currentWorkspaceContext.markers.join(', ')
+                : 'none'
+            }`,
+          )
+          console.log(
+            `README summary: ${currentWorkspaceContext.readmeSummary || 'not available'}`,
+          )
+          console.log('Top-level entries:')
+          for (const entry of currentWorkspaceContext.topLevel.slice(0, 16)) {
+            console.log(`- ${entry}`)
+          }
+          console.log('Instruction files:')
+          if (currentWorkspaceContext.instructionFiles?.length) {
+            for (const file of currentWorkspaceContext.instructionFiles) {
+              console.log(`- ${file.path}`)
+            }
+          } else {
+            console.log('- none')
+          }
+          await sessionStore.save()
+          safePrompt()
+          return
+        }
+
         if (input === '/init') {
           const snapshot = initWorkspace(config.projectRoot, currentWorkspaceContext)
-          const melkyMdPath = path.join(config.projectRoot, 'MELKY.md')
-          const melkyMdContent = renderClaudeMd(snapshot)
-          await fs.promises.writeFile(melkyMdPath, melkyMdContent + '\n', 'utf8')
+          const lupinMdPath = path.join(config.projectRoot, 'LUPIN.md')
+          let previousContent = ''
+          try {
+            previousContent = await fs.promises.readFile(lupinMdPath, 'utf8')
+          } catch {}
+          const lupinMdContent = renderLupinMd(snapshot, previousContent)
+          await fs.promises.writeFile(lupinMdPath, lupinMdContent + '\n', 'utf8')
           sessionStore.setWorkspaceSnapshot(snapshot)
           currentWorkspaceContext = toolRuntime.refreshWorkspaceContext()
           await sessionStore.save()
-          console.log(`Initialized workspace instructions: ${melkyMdPath}`)
+          console.log(`Initialized workspace instructions: ${lupinMdPath}`)
           console.log(formatWorkspaceSnapshot(snapshot))
           safePrompt()
           return
@@ -428,7 +459,7 @@ async function main() {
           }
 
           if (sub === 'hatch') {
-            const name = tail.join(' ').trim() || 'Melky'
+            const name = tail.join(' ').trim() || 'Lupin'
             const next = hatchCompanion(name, config.projectRoot)
             sessionStore.setMgCompanion(next)
             await sessionStore.save()

@@ -17,6 +17,28 @@ function readTopLevelEntries(projectRoot) {
   }
 }
 
+function readReadmeSummary(projectRoot) {
+  const candidates = ['README.md', 'readme.md', 'README']
+  for (const name of candidates) {
+    const content = readTextFile(path.join(projectRoot, name), 4000)
+    if (!content) continue
+    const lines = content
+      .split('\n')
+      .map(line => line.trim().replace(/^>\s*/, ''))
+      .map(line => line.replace(/!\[[^\]]*]\([^)]+\)/g, ''))
+      .map(line => line.replace(/\[([^\]]+)]\([^)]+\)/g, '$1'))
+      .filter(Boolean)
+      .filter(line => !line.startsWith('#'))
+    if (lines.length > 0) {
+      return lines
+        .slice(0, 3)
+        .join(' ')
+        .slice(0, 320)
+    }
+  }
+  return null
+}
+
 function detectGitRoot(projectRoot) {
   let current = path.resolve(projectRoot)
   while (true) {
@@ -51,7 +73,7 @@ export function buildWorkspaceContext(projectRoot) {
     'README.md',
   ].filter(name => fs.existsSync(path.join(resolvedRoot, name)))
 
-  const instructionCandidates = ['MELKY.md', 'CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md']
+  const instructionCandidates = ['LUPIN.md', 'MELKY.md', 'CLAUDE.md', 'CLAUDE.local.md', '.claude/CLAUDE.md']
     .map(relPath => {
       const absPath = path.join(resolvedRoot, relPath)
       const content = readTextFile(absPath)
@@ -65,6 +87,7 @@ export function buildWorkspaceContext(projectRoot) {
     gitRoot: detectGitRoot(resolvedRoot),
     markers: signals,
     topLevel,
+    readmeSummary: readReadmeSummary(resolvedRoot),
     instructionFiles: instructionCandidates,
   }
 }
