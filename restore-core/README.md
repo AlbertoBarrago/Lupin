@@ -39,10 +39,19 @@ To point the agent at a different codebase explicitly:
 node restore-core/src/index.mjs --project-root /absolute/path/to/project
 ```
 
-If you install it as a CLI entrypoint, the intended command name is:
+To install the CLI in your shell and run it from other project roots:
 
 ```bash
+cd restore-core
+npm link
+cd /absolute/path/to/project
 lupin --project-root /absolute/path/to/project
+```
+
+If you are already inside the target project root, the zsh-friendly form is:
+
+```bash
+lupin --project-root "$PWD"
 ```
 
 ## Ollama setup
