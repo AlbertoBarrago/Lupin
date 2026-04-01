@@ -30,6 +30,37 @@ function looksLikeProjectQuestion(task) {
   )
 }
 
+function looksLikeImplementationTask(task) {
+  const value = normalizeTaskText(task).toLowerCase()
+  if (!value) return false
+  return (
+    value.includes('implement') ||
+    value.includes('feature') ||
+    value.includes('add ') ||
+    value.includes('create ') ||
+    value.includes('build ') ||
+    value.includes('fix ') ||
+    value.includes('bug') ||
+    value.includes('refactor') ||
+    value.includes('update ') ||
+    value.includes('modify ')
+  )
+}
+
+function buildImplementationWorkflowInstruction() {
+  return [
+    'IMPLEMENTATION_WORKFLOW:',
+    'This task likely requires code changes.',
+    'First inspect relevant files before editing anything.',
+    'Use GlobTool/GrepTool/FileReadTool to locate the right files and understand existing patterns.',
+    'Then make the smallest necessary edit.',
+    'Prefer FileEditTool for targeted changes inside existing files. Use FileWriteTool when creating a new file or replacing a file intentionally.',
+    'After editing, verify the result before finishing.',
+    'Verification should prefer reading the changed files and running a focused BashTool command when appropriate, such as tests, lint, or typecheck.',
+    'Your final answer must mention what changed and how you verified it.',
+  ].join(' ')
+}
+
 function buildProjectProbeInstruction(workspaceContext) {
   const targets = [
     'README.md',
@@ -79,6 +110,24 @@ function buildWorkspaceFallback(workspaceContext) {
     .join(' ')
 }
 
+function isInspectionTool(toolName) {
+  return toolName === 'GlobTool' || toolName === 'GrepTool' || toolName === 'FileReadTool'
+}
+
+function isVerificationBash(command) {
+  const value = String(command || '').toLowerCase()
+  return (
+    value.includes('test') ||
+    value.includes('lint') ||
+    value.includes('typecheck') ||
+    value.includes('check') ||
+    value.includes('vitest') ||
+    value.includes('jest') ||
+    value.includes('pytest') ||
+    value.includes('tsc')
+  )
+}
+
 export class QueryEngine {
   constructor({ modelAdapter, toolRuntime, maxSteps = 12, debug = false }) {
     this.modelAdapter = modelAdapter
@@ -90,6 +139,7 @@ export class QueryEngine {
   async runTask(task, historyMessages = []) {
     const normalizedTask = normalizeTaskText(task)
     const workspaceContext = this.toolRuntime.getWorkspaceContext()
+    const implementationTask = looksLikeImplementationTask(normalizedTask)
     const systemPrompt = buildSystemPrompt(
       this.toolRuntime.listTools(),
       workspaceContext,
@@ -106,7 +156,19 @@ export class QueryEngine {
       })
     }
 
+    if (implementationTask) {
+      messages.push({
+        role: 'user',
+        content: buildImplementationWorkflowInstruction(),
+      })
+    }
+
     messages.push({ role: 'user', content: normalizedTask })
+
+    let inspectionCount = 0
+    let hasEditedFiles = false
+    let hasVerifiedChanges = false
+    const changedFiles = new Set()
 
     for (let step = 1; step <= this.maxSteps; step++) {
       const raw = await this.modelAdapter.chat(messages, {
@@ -127,6 +189,26 @@ export class QueryEngine {
       }
 
       if (isValidFinalShape(parsed)) {
+        if (implementationTask && inspectionCount === 0) {
+          messages.push({ role: 'assistant', content: JSON.stringify(parsed) })
+          messages.push({
+            role: 'user',
+            content:
+              'WORKFLOW_ERROR: this implementation task requires inspection first. Use GlobTool, GrepTool, or FileReadTool before finishing.',
+          })
+          continue
+        }
+
+        if (implementationTask && hasEditedFiles && !hasVerifiedChanges) {
+          messages.push({ role: 'assistant', content: JSON.stringify(parsed) })
+          messages.push({
+            role: 'user',
+            content:
+              'WORKFLOW_ERROR: you edited files but did not verify the result yet. Read the changed files and/or run a focused verification command before finishing.',
+          })
+          continue
+        }
+
         const answer = isWeakFinalAnswer(parsed.content)
           ? buildWorkspaceFallback(workspaceContext)
           : parsed.content
@@ -139,6 +221,24 @@ export class QueryEngine {
 
       if (isValidToolCallShape(parsed)) {
         const result = await this.toolRuntime.execute(parsed.tool, parsed.args || {})
+        if (isInspectionTool(parsed.tool)) {
+          inspectionCount += 1
+        }
+        if ((parsed.tool === 'FileWriteTool' || parsed.tool === 'FileEditTool') && result?.ok) {
+          hasEditedFiles = true
+          if (result.result?.path) {
+            changedFiles.add(String(result.result.path))
+          }
+        }
+        if (parsed.tool === 'FileReadTool' && result?.ok) {
+          const readPath = String(result.result?.path || '')
+          if ([...changedFiles].some(file => file === readPath)) {
+            hasVerifiedChanges = true
+          }
+        }
+        if (parsed.tool === 'BashTool' && result?.ok && isVerificationBash(parsed.args?.command)) {
+          hasVerifiedChanges = true
+        }
         messages.push({ role: 'assistant', content: JSON.stringify(parsed) })
         messages.push({
           role: 'user',

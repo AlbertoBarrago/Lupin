@@ -10,6 +10,7 @@ import { ToolRuntime } from './core/toolRuntime.mjs'
 import { QueryEngine } from './core/queryEngine.mjs'
 import { SessionStore } from './storage/sessionStore.mjs'
 import { BashTool } from './tools/BashTool.mjs'
+import { FileEditTool } from './tools/FileEditTool.mjs'
 import { FileReadTool } from './tools/FileReadTool.mjs'
 import { FileWriteTool } from './tools/FileWriteTool.mjs'
 import { GlobTool } from './tools/GlobTool.mjs'
@@ -223,7 +224,7 @@ async function main() {
   const model = new OllamaAdapter(config.ollama)
   const toolRuntime = new ToolRuntime({
     projectRoot: config.projectRoot,
-    tools: [BashTool, FileReadTool, FileWriteTool, GlobTool, GrepTool],
+    tools: [BashTool, FileEditTool, FileReadTool, FileWriteTool, GlobTool, GrepTool],
     securityConfig: config.security,
     debug: config.debug,
   })

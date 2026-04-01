@@ -2,6 +2,10 @@
 
 ## Priority 1
 
+- Strengthen editing reliability for implementation tasks.
+  Done: added implementation workflow guardrails and a partial-edit tool for existing files.
+  Next: support insert-before/after edits, unified-diff style edits, and better conflict handling when the target text is no longer unique.
+
 - Make `Lupin` more repo-aware on first contact.
   Detect likely entrypoints, build/test commands, framework signals, and architectural hotspots without relying too much on `README.md`.
 
@@ -12,7 +16,12 @@
   Force better initial inspection strategies, avoid vague fallback replies, and summarize inspected evidence before conclusions.
 
 - Add verification workflows.
-  Teach Lupin to detect and run the safest repo-native validation command after edits, then report what was actually verified.
+  Done: implementation tasks now require some verification before finalizing if files were edited.
+  Next: teach Lupin to infer the safest repo-native validation command automatically instead of relying on generic Bash guesses.
+
+- Make chat mode more natural and less noisy.
+  Done: separated chat history from command/code history, suppressed ambient `mg` lines for conversational replies, and added cleaner greeting handling.
+  Next: improve model-side style consistency and reduce terse low-value replies from weaker Ollama models.
 
 ## Priority 2
 

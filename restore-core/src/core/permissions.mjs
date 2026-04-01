@@ -9,10 +9,14 @@ const DANGEROUS_BASH_PATTERNS = [
 ]
 
 export function classifyRisk(toolName) {
-  if (toolName === 'FileReadTool' || toolName === 'GlobTool' || toolName === 'GrepTool') {
+  if (
+    toolName === 'FileReadTool' ||
+    toolName === 'GlobTool' ||
+    toolName === 'GrepTool'
+  ) {
     return 'LOW'
   }
-  if (toolName === 'FileWriteTool') {
+  if (toolName === 'FileWriteTool' || toolName === 'FileEditTool') {
     return 'MEDIUM'
   }
   if (toolName === 'BashTool') {
