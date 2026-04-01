@@ -101,6 +101,10 @@ function detectCodingIntent(text) {
   const value = String(text || '').toLowerCase()
   return (
     value.includes('code') ||
+    value.includes('project') ||
+    value.includes('repository') ||
+    value.includes('repo') ||
+    value.includes('codebase') ||
     value.includes('file') ||
     value.includes('refactor') ||
     value.includes('debug') ||
@@ -113,8 +117,17 @@ function detectCodingIntent(text) {
     value.includes('class') ||
     value.includes('typescript') ||
     value.includes('javascript') ||
-    value.includes('python')
+    value.includes('python') ||
+    value.includes('interesting') ||
+    value.includes('good project') ||
+    value.includes('why is this')
   )
+}
+
+function normalizeUserInput(text) {
+  return String(text || '')
+    .replace(/^\s*assistant>\s*/i, '')
+    .trim()
 }
 
 async function runChatReply(model, sessionStore, prompt, maxHistory) {
@@ -227,7 +240,7 @@ async function main() {
   rl.on('line', line => {
     queue = queue
       .then(async () => {
-        const input = String(line || '').trim()
+        const input = normalizeUserInput(line)
         if (!input) {
           safePrompt()
           return
