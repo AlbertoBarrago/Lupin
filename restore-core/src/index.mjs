@@ -20,15 +20,6 @@ import {
   initWorkspace,
   renderLupinMd,
 } from './core/workspaceInit.mjs'
-import {
-  ambientLine,
-  applyAction,
-  formatCompanionStatus,
-  hatchCompanion,
-  renameCompanion,
-  setMuted,
-  tickCompanion,
-} from './mg/companion.mjs'
 
 const STARTUP_LOGOS = [
   [
@@ -74,27 +65,8 @@ function printHelp() {
       '/read <path>                Read a file directly',
       '/grep <pattern> [--path p]  Search text directly',
       '/bash <command>             Run shell command directly',
-      '/mg ...                     Buddy-like companion mode',
       '',
       'Default mode is code. Non-command input follows current mode.',
-    ].join('\n'),
-  )
-}
-
-function printMgHelp() {
-  console.log(
-    [
-      'MG commands:',
-      '/mg help                    Show this help',
-      '/mg hatch <name>            Create your companion',
-      '/mg status                  Show companion stats',
-      '/mg feed                    Feed companion',
-      '/mg play                    Play with companion',
-      '/mg nap                     Recover companion energy',
-      '/mg pet                     Give affection boost',
-      '/mg rename <name>           Rename companion',
-      '/mg mute on|off             Toggle ambient companion lines',
-      '/mg say                     Force one ambient line',
     ].join('\n'),
   )
 }
@@ -130,11 +102,6 @@ function normalizeUserInput(text) {
   return String(text || '')
     .replace(/^\s*assistant>\s*/i, '')
     .trim()
-}
-
-function shouldShowAmbientLine(responseKind) {
-  if (responseKind === 'chat') return false
-  return true
 }
 
 function detectGreetingLanguage(text) {
@@ -298,9 +265,6 @@ async function main() {
           if (snapshot) {
             console.log(formatWorkspaceSnapshot(snapshot))
           }
-          const mg = tickCompanion(sessionStore.getMgCompanion())
-          sessionStore.setMgCompanion(mg)
-          console.log(`MG: ${mg ? `${mg.name} (${mg.species}, lvl ${mg.level})` : 'not hatched'}`)
           await sessionStore.save()
           safePrompt()
           return
@@ -412,15 +376,8 @@ async function main() {
             config.agent.maxHistory,
           )
           sessionStore.appendWithMeta('assistant', answer, { kind: 'chat', mode: 'chat' })
-          const mgTicked = tickCompanion(sessionStore.getMgCompanion())
-          sessionStore.setMgCompanion(mgTicked)
           await sessionStore.save()
           console.log(answer)
-          const extra = ambientLine(sessionStore.getMgCompanion())
-          if (shouldShowAmbientLine('chat') && extra && Math.random() < 0.35) {
-            console.log(`[mg] ${extra}`)
-          }
-          await sessionStore.save()
           safePrompt()
           return
         }
@@ -479,101 +436,6 @@ async function main() {
           }
           const payload = await toolRuntime.execute('BashTool', { command })
           console.log(renderDirectToolResult(payload))
-          await sessionStore.save()
-          safePrompt()
-          return
-        }
-
-        if (input.startsWith('/mg')) {
-          const raw = input.replace(/^\/mg\s*/, '').trim()
-          const [sub, ...tail] = raw.split(/\s+/)
-          const companion = tickCompanion(sessionStore.getMgCompanion())
-          sessionStore.setMgCompanion(companion)
-
-          if (!sub || sub === 'help') {
-            printMgHelp()
-            await sessionStore.save()
-            safePrompt()
-            return
-          }
-
-          if (sub === 'hatch') {
-            const name = tail.join(' ').trim() || 'Lupin'
-            const next = hatchCompanion(name, config.projectRoot)
-            sessionStore.setMgCompanion(next)
-            await sessionStore.save()
-            console.log(
-              `Companion hatched: ${next.name} the ${next.species} (${next.rarity})`,
-            )
-            safePrompt()
-            return
-          }
-
-          if (sub === 'status') {
-            console.log(formatCompanionStatus(companion))
-            await sessionStore.save()
-            safePrompt()
-            return
-          }
-
-          if (sub === 'rename') {
-            const nextName = tail.join(' ').trim()
-            if (!nextName) {
-              console.log('Usage: /mg rename <name>')
-              await sessionStore.save()
-              safePrompt()
-              return
-            }
-            const renamed = renameCompanion(companion, nextName)
-            sessionStore.setMgCompanion(renamed)
-            await sessionStore.save()
-            console.log(renamed ? `Renamed companion to ${renamed.name}.` : 'No companion to rename.')
-            safePrompt()
-            return
-          }
-
-          if (sub === 'mute') {
-            const value = (tail[0] || '').toLowerCase()
-            if (!['on', 'off'].includes(value)) {
-              console.log('Usage: /mg mute on|off')
-              await sessionStore.save()
-              safePrompt()
-              return
-            }
-            const muted = value === 'on'
-            const updated = setMuted(companion, muted)
-            sessionStore.setMgCompanion(updated)
-            await sessionStore.save()
-            console.log(updated ? `MG ambient lines ${muted ? 'muted' : 'enabled'}.` : 'No companion to mute.')
-            safePrompt()
-            return
-          }
-
-          if (sub === 'say') {
-            const line = ambientLine(companion)
-            if (!line) {
-              console.log('No companion line available. Hatch first or unmute.')
-            } else {
-              console.log(`[mg] ${line}`)
-            }
-            await sessionStore.save()
-            safePrompt()
-            return
-          }
-
-          if (['feed', 'play', 'nap', 'pet'].includes(sub)) {
-            const outcome = applyAction(companion, sub)
-            sessionStore.setMgCompanion(outcome.companion)
-            await sessionStore.save()
-            console.log(outcome.message)
-            if (outcome.companion) {
-              console.log(formatCompanionStatus(outcome.companion))
-            }
-            safePrompt()
-            return
-          }
-
-          console.log('Unknown /mg command. Run /mg help.')
           await sessionStore.save()
           safePrompt()
           return

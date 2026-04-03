@@ -71,15 +71,11 @@ Then in the agent:
 - `/model qwen2.5-coder:7b` (optional)
 - `/mode code` (default)
 - `/code inspect this repository and list key entry files`
-- `/mg hatch Lupin` (spawn buddy-style companion mode)
-
 You can also use mixed behavior:
 
 - `/mode chat` for normal assistant replies
 - `/mode auto` to choose chat vs code by intent
 - `/ask <prompt>` for direct chat reply without tool loop
-- `/mg help` for companion actions (feed/play/nap/pet/mute/status)
-
 Direct inspection commands (no planner required):
 
 - `/files [regex]`
@@ -95,7 +91,7 @@ Direct inspection commands (no planner required):
 - `OLLAMA_MODEL` default: `llama3.2`
 - `OLLAMA_TIMEOUT_MS` default: `20000`
 - `AGENT_PROJECT_ROOT` default: current repo root
-- `AGENT_MAX_STEPS` default: `14`
+- `AGENT_MAX_STEPS` default: `30`
 - `AGENT_MAX_HISTORY` default: `16`
 - `AGENT_MODE` default: `code` (`code`, `chat`, or `auto`)
 - `AGENT_DENY_DANGEROUS_BASH` default: `1`

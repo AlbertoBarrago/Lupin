@@ -89,7 +89,7 @@ import { filterCommandsForRemoteMode, getCommands } from './commands.js';
 import type { StatsStore } from './context/stats.js';
 import { launchAssistantInstallWizard, launchAssistantSessionChooser, launchInvalidSettingsDialog, launchResumeChooser, launchSnapshotUpdateDialog, launchTeleportRepoMismatchDialog, launchTeleportResumeWrapper } from './dialogLaunchers.js';
 import { SHOW_CURSOR } from './ink/termio/dec.js';
-import { exitWithError, exitWithMessage, getRenderContext, renderAndRun, showSetupScreens } from './interactiveHelpers.js';
+import { exitWithError, exitWithMessage, getRenderContext, renderAndRun } from './interactiveHelpers.js';
 import { initBuiltinPlugins } from './plugins/bundled/index.js';
 /* eslint-enable @typescript-eslint/no-require-imports */
 import { checkQuotaStatus } from './services/claudeAiLimits.js';
@@ -191,6 +191,7 @@ import { shouldEnablePromptSuggestion } from './services/PromptSuggestion/prompt
 import { type AppState, getDefaultAppState, IDLE_SPECULATION_STATE } from './state/AppStateStore.js';
 import { onChangeAppState } from './state/onChangeAppState.js';
 import { createStore } from './state/store.js';
+import { showSetupScreens } from './startup/interactiveSetup.js';
 import { asSessionId } from './types/ids.js';
 import { filterAllowedSdkBetas } from './utils/betas.js';
 import { isInBundledMode, isRunningWithBun } from './utils/bundledMode.js';

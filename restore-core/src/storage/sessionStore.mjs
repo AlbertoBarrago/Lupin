@@ -16,7 +16,6 @@ function defaultData() {
     workspaceRoot: null,
     workspaceSnapshot: null,
     conversation: [],
-    mgCompanion: null,
   }
 }
 
@@ -40,7 +39,6 @@ export class SessionStore {
         workspaceRoot: parsed.workspaceRoot || this.workspaceRoot,
         workspaceSnapshot: parsed.workspaceSnapshot ?? null,
         conversation: Array.isArray(parsed.conversation) ? parsed.conversation : [],
-        mgCompanion: parsed.mgCompanion ?? null,
       }
     } catch {
       this.state = defaultData()
@@ -66,20 +64,12 @@ export class SessionStore {
     }
   }
 
-  getMgCompanion() {
-    return this.state.mgCompanion ?? null
-  }
-
   getWorkspaceSnapshot() {
     return this.state.workspaceSnapshot ?? null
   }
 
   setWorkspaceSnapshot(value) {
     this.state.workspaceSnapshot = value ?? null
-  }
-
-  setMgCompanion(value) {
-    this.state.mgCompanion = value ?? null
   }
 
   getModelHistory(limit = 16, options = {}) {

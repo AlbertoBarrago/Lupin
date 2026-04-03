@@ -49,7 +49,7 @@ export function loadConfig() {
       timeoutMs: Number.parseInt(process.env.OLLAMA_TIMEOUT_MS || '20000', 10),
     },
     agent: {
-      maxSteps: Number.parseInt(process.env.AGENT_MAX_STEPS || '14', 10),
+      maxSteps: Number.parseInt(process.env.AGENT_MAX_STEPS || '30', 10),
       maxHistory: Number.parseInt(process.env.AGENT_MAX_HISTORY || '16', 10),
       defaultMode,
     },
