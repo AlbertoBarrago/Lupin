@@ -628,19 +628,39 @@ export function normalizeToolInput<T extends Tool>(
         file_path: parsedInput.file_path,
         edits: [
           {
-            old_string: parsedInput.old_string,
             new_string: parsedInput.new_string,
-            replace_all: parsedInput.replace_all,
+            ...(parsedInput.old_string !== undefined
+              ? { old_string: parsedInput.old_string }
+              : {}),
+            ...(parsedInput.insert_before !== undefined
+              ? { insert_before: parsedInput.insert_before }
+              : {}),
+            ...(parsedInput.insert_after !== undefined
+              ? { insert_after: parsedInput.insert_after }
+              : {}),
+            ...(parsedInput.replace_all !== undefined
+              ? { replace_all: parsedInput.replace_all }
+              : {}),
           },
         ],
       })
 
       // SAFETY: See comment in BashTool case above
       return {
-        replace_all: edits[0]!.replace_all,
         file_path,
-        old_string: edits[0]!.old_string,
         new_string: edits[0]!.new_string,
+        ...(edits[0]!.old_string !== undefined
+          ? { old_string: edits[0]!.old_string }
+          : {}),
+        ...(edits[0]!.insert_before !== undefined
+          ? { insert_before: edits[0]!.insert_before }
+          : {}),
+        ...(edits[0]!.insert_after !== undefined
+          ? { insert_after: edits[0]!.insert_after }
+          : {}),
+        ...(edits[0]!.replace_all !== undefined
+          ? { replace_all: edits[0]!.replace_all }
+          : {}),
       } as z.infer<T['inputSchema']>
     }
     case FileWriteTool.name: {
@@ -706,7 +726,14 @@ export function normalizeToolInputForAPI<T extends Tool>(
       // transcripts don't send whole-file copies to the API. New sessions
       // don't need this (synthesis moved to emission time).
       if (input && typeof input === 'object' && 'edits' in input) {
-        const { old_string, new_string, replace_all, ...rest } =
+        const {
+          old_string,
+          new_string,
+          replace_all,
+          insert_before,
+          insert_after,
+          ...rest
+        } =
           input as Record<string, unknown>
         return rest as z.infer<T['inputSchema']>
       }

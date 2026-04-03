@@ -3,8 +3,8 @@
 ## Priority 1
 
 - Strengthen editing reliability for implementation tasks.
-  Done: added implementation workflow guardrails and a partial-edit tool for existing files.
-  Next: support insert-before/after edits, unified-diff style edits, and better conflict handling when the target text is no longer unique.
+  Done: added implementation workflow guardrails, a partial-edit tool for existing files, and anchored insert-before/after edits.
+  Next: support unified-diff style edits and better conflict handling when the target text is no longer unique.
 
 - Make `Lupin` more repo-aware on first contact.
   Detect likely entrypoints, build/test commands, framework signals, and architectural hotspots without relying too much on `README.md`.

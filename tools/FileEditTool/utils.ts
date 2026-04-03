@@ -13,7 +13,7 @@ import {
   convertLeadingTabsToSpaces,
   readFileSyncCached,
 } from '../../utils/file.js'
-import type { EditInput, FileEdit } from './types.js'
+import type { EditInput, FileEdit, FileEditInput } from './types.js'
 
 // Claude can't output curly quotes, so we define them as constants here for Claude to use
 // in the code. We do this because we normalize curly quotes to straight quotes
@@ -227,6 +227,111 @@ export function applyEditToFile(
     : f(originalContent, oldString, newString)
 }
 
+export type ResolvedFileEditOperation =
+  | {
+      kind: 'replace'
+      oldString: string
+      newString: string
+      replaceAll: boolean
+    }
+  | {
+      kind: 'insert_before'
+      anchor: string
+      newString: string
+    }
+  | {
+      kind: 'insert_after'
+      anchor: string
+      newString: string
+    }
+
+export function getRequestedTargetString(input: {
+  old_string?: string
+  insert_before?: string
+  insert_after?: string
+}): string {
+  return input.old_string ?? input.insert_before ?? input.insert_after ?? ''
+}
+
+export function getEditMode(input: {
+  old_string?: string
+  insert_before?: string
+  insert_after?: string
+}): 'replace' | 'insert_before' | 'insert_after' {
+  if (input.insert_before !== undefined) return 'insert_before'
+  if (input.insert_after !== undefined) return 'insert_after'
+  return 'replace'
+}
+
+export function resolveFileEditOperation(
+  fileContent: string,
+  input: Pick<
+    FileEditInput,
+    'old_string' | 'new_string' | 'replace_all' | 'insert_before' | 'insert_after'
+  >,
+): ResolvedFileEditOperation | null {
+  const mode = getEditMode(input)
+  const requestedTarget = getRequestedTargetString(input)
+  const actualTarget = findActualString(fileContent, requestedTarget)
+  if (!actualTarget) {
+    return null
+  }
+
+  const actualNewString = preserveQuoteStyle(
+    requestedTarget,
+    actualTarget,
+    input.new_string,
+  )
+
+  if (mode === 'insert_before') {
+    return {
+      kind: 'insert_before',
+      anchor: actualTarget,
+      newString: actualNewString,
+    }
+  }
+
+  if (mode === 'insert_after') {
+    return {
+      kind: 'insert_after',
+      anchor: actualTarget,
+      newString: actualNewString,
+    }
+  }
+
+  return {
+    kind: 'replace',
+    oldString: actualTarget,
+    newString: actualNewString,
+    replaceAll: input.replace_all ?? false,
+  }
+}
+
+export function applyResolvedFileEditToFile(
+  originalContent: string,
+  operation: ResolvedFileEditOperation,
+): string {
+  switch (operation.kind) {
+    case 'replace':
+      return applyEditToFile(
+        originalContent,
+        operation.oldString,
+        operation.newString,
+        operation.replaceAll,
+      )
+    case 'insert_before':
+      return originalContent.replace(
+        operation.anchor,
+        `${operation.newString}${operation.anchor}`,
+      )
+    case 'insert_after':
+      return originalContent.replace(
+        operation.anchor,
+        `${operation.anchor}${operation.newString}`,
+      )
+  }
+}
+
 /**
  * Applies an edit to a file and returns the patch and updated file.
  * Does not write the file to disk.
@@ -251,6 +356,39 @@ export function getPatchForEdit({
       { old_string: oldString, new_string: newString, replace_all: replaceAll },
     ],
   })
+}
+
+export function getPatchForInput({
+  filePath,
+  fileContents,
+  input,
+}: {
+  filePath: string
+  fileContents: string
+  input: Pick<
+    FileEditInput,
+    'old_string' | 'new_string' | 'replace_all' | 'insert_before' | 'insert_after'
+  >
+}): { patch: StructuredPatchHunk[]; updatedFile: string } {
+  const operation = resolveFileEditOperation(fileContents, input)
+  if (!operation) {
+    throw new Error('String not found in file. Failed to apply edit.')
+  }
+
+  const updatedFile = applyResolvedFileEditToFile(fileContents, operation)
+  if (updatedFile === fileContents) {
+    throw new Error(
+      'Original and edited file match exactly. Failed to apply edit.',
+    )
+  }
+
+  const patch = getPatchFromContents({
+    filePath,
+    oldContent: convertLeadingTabsToSpaces(fileContents),
+    newContent: convertLeadingTabsToSpaces(updatedFile),
+  })
+
+  return { patch, updatedFile }
 }
 
 /**
@@ -606,10 +744,20 @@ export function normalizeFileEditInput({
 
     return {
       file_path,
-      edits: edits.map(({ old_string, new_string, replace_all }) => {
+      edits: edits.map(
+        ({ old_string, new_string, replace_all, insert_before, insert_after }) => {
         const normalizedNewString = isMarkdown
           ? new_string
           : stripTrailingWhitespace(new_string)
+
+        if (old_string === undefined) {
+          return {
+            ...(insert_before !== undefined ? { insert_before } : {}),
+            ...(insert_after !== undefined ? { insert_after } : {}),
+            new_string: normalizedNewString,
+            replace_all,
+          }
+        }
 
         // If exact string match works, keep it as is
         if (fileContent.includes(old_string)) {

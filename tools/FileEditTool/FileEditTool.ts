@@ -71,9 +71,10 @@ import {
 } from './UI.js'
 import {
   areFileEditsInputsEquivalent,
-  findActualString,
-  getPatchForEdit,
-  preserveQuoteStyle,
+  getEditMode,
+  getPatchForInput,
+  getRequestedTargetString,
+  resolveFileEditOperation,
 } from './utils.js'
 
 // V8/Bun string length limit is ~2^30 characters (~1 billion). For typical
@@ -135,7 +136,14 @@ export const FileEditTool = buildTool({
   renderToolUseRejectedMessage,
   renderToolUseErrorMessage,
   async validateInput(input: FileEditInput, toolUseContext: ToolUseContext) {
-    const { file_path, old_string, new_string, replace_all = false } = input
+    const {
+      file_path,
+      old_string,
+      new_string,
+      replace_all = false,
+    } = input
+    const editMode = getEditMode(input)
+    const requestedTarget = getRequestedTargetString(input)
     // Use expandPath for consistent path normalization (especially on Windows
     // where "/" vs "\" can cause readFileState lookup mismatches)
     const fullFilePath = expandPath(file_path)
@@ -145,7 +153,7 @@ export const FileEditTool = buildTool({
     if (secretError) {
       return { result: false, message: secretError, errorCode: 0 }
     }
-    if (old_string === new_string) {
+    if (editMode === 'replace' && old_string === new_string) {
       return {
         result: false,
         behavior: 'ask',
@@ -223,7 +231,7 @@ export const FileEditTool = buildTool({
     // File doesn't exist
     if (fileContent === null) {
       // Empty old_string on nonexistent file means new file creation — valid
-      if (old_string === '') {
+      if (editMode === 'replace' && old_string === '') {
         return { result: true }
       }
       // Try to find a similar file with a different extension
@@ -246,7 +254,7 @@ export const FileEditTool = buildTool({
     }
 
     // File exists with empty old_string — only valid if file is empty
-    if (old_string === '') {
+    if (editMode === 'replace' && old_string === '') {
       // Only reject if the file has content (for file creation attempt)
       if (fileContent.trim() !== '') {
         return {
@@ -312,13 +320,18 @@ export const FileEditTool = buildTool({
 
     const file = fileContent
 
-    // Use findActualString to handle quote normalization
-    const actualOldString = findActualString(file, old_string)
-    if (!actualOldString) {
+    const resolvedOperation = resolveFileEditOperation(file, input)
+    if (!resolvedOperation) {
+      const failureLabel =
+        editMode === 'insert_before'
+          ? 'Insertion anchor for insert_before not found in file.'
+          : editMode === 'insert_after'
+            ? 'Insertion anchor for insert_after not found in file.'
+            : 'String to replace not found in file.'
       return {
         result: false,
         behavior: 'ask',
-        message: `String to replace not found in file.\nString: ${old_string}`,
+        message: `${failureLabel}\nString: ${requestedTarget}`,
         meta: {
           isFilePathAbsolute: String(isAbsolute(file_path)),
         },
@@ -326,17 +339,25 @@ export const FileEditTool = buildTool({
       }
     }
 
-    const matches = file.split(actualOldString).length - 1
+    const matchTarget =
+      resolvedOperation.kind === 'replace'
+        ? resolvedOperation.oldString
+        : resolvedOperation.anchor
+    const matches = file.split(matchTarget).length - 1
 
-    // Check if we have multiple matches but replace_all is false
-    if (matches > 1 && !replace_all) {
+    // Check if we have multiple matches but the operation only targets one.
+    if (matches > 1 && (editMode !== 'replace' || !replace_all)) {
+      const multiMatchMessage =
+        editMode === 'replace'
+          ? `Found ${matches} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: ${requestedTarget}`
+          : `Found ${matches} matches of the insertion anchor, so the insertion target is ambiguous. Please provide more context to uniquely identify the anchor.\nString: ${requestedTarget}`
       return {
         result: false,
         behavior: 'ask',
-        message: `Found ${matches} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: ${old_string}`,
+        message: multiMatchMessage,
         meta: {
           isFilePathAbsolute: String(isAbsolute(file_path)),
-          actualOldString,
+          actualOldString: matchTarget,
         },
         errorCode: 9,
       }
@@ -348,9 +369,28 @@ export const FileEditTool = buildTool({
       file,
       () => {
         // Simulate the edit to get the final content using the exact same logic as the tool
-        return replace_all
-          ? file.replaceAll(actualOldString, new_string)
-          : file.replace(actualOldString, new_string)
+        switch (resolvedOperation.kind) {
+          case 'replace':
+            return resolvedOperation.replaceAll
+              ? file.replaceAll(
+                  resolvedOperation.oldString,
+                  resolvedOperation.newString,
+                )
+              : file.replace(
+                  resolvedOperation.oldString,
+                  resolvedOperation.newString,
+                )
+          case 'insert_before':
+            return file.replace(
+              resolvedOperation.anchor,
+              `${resolvedOperation.newString}${resolvedOperation.anchor}`,
+            )
+          case 'insert_after':
+            return file.replace(
+              resolvedOperation.anchor,
+              `${resolvedOperation.anchor}${resolvedOperation.newString}`,
+            )
+        }
       },
     )
 
@@ -358,7 +398,7 @@ export const FileEditTool = buildTool({
       return settingsValidationResult
     }
 
-    return { result: true, meta: { actualOldString } }
+    return { result: true, meta: { actualOldString: matchTarget } }
   },
   inputsEquivalent(input1, input2) {
     return areFileEditsInputsEquivalent(
@@ -366,8 +406,16 @@ export const FileEditTool = buildTool({
         file_path: input1.file_path,
         edits: [
           {
-            old_string: input1.old_string,
+            ...(input1.old_string !== undefined
+              ? { old_string: input1.old_string }
+              : {}),
             new_string: input1.new_string,
+            ...(input1.insert_before !== undefined
+              ? { insert_before: input1.insert_before }
+              : {}),
+            ...(input1.insert_after !== undefined
+              ? { insert_after: input1.insert_after }
+              : {}),
             replace_all: input1.replace_all ?? false,
           },
         ],
@@ -376,8 +424,16 @@ export const FileEditTool = buildTool({
         file_path: input2.file_path,
         edits: [
           {
-            old_string: input2.old_string,
+            ...(input2.old_string !== undefined
+              ? { old_string: input2.old_string }
+              : {}),
             new_string: input2.new_string,
+            ...(input2.insert_before !== undefined
+              ? { insert_before: input2.insert_before }
+              : {}),
+            ...(input2.insert_after !== undefined
+              ? { insert_after: input2.insert_after }
+              : {}),
             replace_all: input2.replace_all ?? false,
           },
         ],
@@ -467,24 +523,17 @@ export const FileEditTool = buildTool({
       }
     }
 
-    // 3. Use findActualString to handle quote normalization
-    const actualOldString =
-      findActualString(originalFileContents, old_string) || old_string
-
-    // Preserve curly quotes in new_string when the file uses them
-    const actualNewString = preserveQuoteStyle(
-      old_string,
-      actualOldString,
-      new_string,
-    )
+    const resolvedOperation =
+      resolveFileEditOperation(originalFileContents, input) ??
+      (() => {
+        throw new Error('String not found in file. Failed to apply edit.')
+      })()
 
     // 4. Generate patch
-    const { patch, updatedFile } = getPatchForEdit({
+    const { patch, updatedFile } = getPatchForInput({
       filePath: absoluteFilePath,
       fileContents: originalFileContents,
-      oldString: actualOldString,
-      newString: actualNewString,
-      replaceAll: replace_all,
+      input,
     })
 
     // 5. Write to disk
@@ -537,7 +586,10 @@ export const FileEditTool = buildTool({
     })
 
     logEvent('tengu_edit_string_lengths', {
-      oldStringBytes: Buffer.byteLength(old_string, 'utf8'),
+      oldStringBytes: Buffer.byteLength(
+        getRequestedTargetString(input),
+        'utf8',
+      ),
       newStringBytes: Buffer.byteLength(new_string, 'utf8'),
       replaceAll: replace_all,
     })
@@ -560,7 +612,10 @@ export const FileEditTool = buildTool({
     // 8. Yield result
     const data = {
       filePath: file_path,
-      oldString: actualOldString,
+      oldString:
+        resolvedOperation.kind === 'replace'
+          ? resolvedOperation.oldString
+          : resolvedOperation.anchor,
       newString: new_string,
       originalFile: originalFileContents,
       structuredPatch: patch,

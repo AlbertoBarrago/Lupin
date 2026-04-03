@@ -19,13 +19,15 @@ import { getPlansDirectory } from '../../utils/plans.js';
 import { readEditContext } from '../../utils/readEditContext.js';
 import { firstLineOf } from '../../utils/stringUtils.js';
 import type { ThemeName } from '../../utils/theme.js';
-import type { FileEditOutput } from './types.js';
-import { findActualString, getPatchForEdit, preserveQuoteStyle } from './utils.js';
+import type { FileEditInput, FileEditOutput } from './types.js';
+import { getEditMode, getPatchForInput } from './utils.js';
 export function userFacingName(input: Partial<{
   file_path: string;
   old_string: string;
   new_string: string;
   replace_all: boolean;
+  insert_before: string;
+  insert_after: string;
   edits: unknown[];
 }> | undefined): string {
   if (!input) {
@@ -94,6 +96,8 @@ export function renderToolUseRejectedMessage(input: {
   old_string?: string;
   new_string?: string;
   replace_all?: boolean;
+  insert_before?: string;
+  insert_after?: string;
   edits?: unknown[];
 }, options: {
   columns: number;
@@ -111,19 +115,34 @@ export function renderToolUseRejectedMessage(input: {
   const filePath = input.file_path;
   const oldString = input.old_string ?? '';
   const newString = input.new_string ?? '';
-  const replaceAll = input.replace_all ?? false;
+  const editInput: FileEditInput = {
+    file_path: filePath,
+    new_string: newString,
+    ...(input.old_string !== undefined ? {
+      old_string: input.old_string
+    } : {}),
+    ...(input.insert_before !== undefined ? {
+      insert_before: input.insert_before
+    } : {}),
+    ...(input.insert_after !== undefined ? {
+      insert_after: input.insert_after
+    } : {}),
+    ...(input.replace_all !== undefined ? {
+      replace_all: input.replace_all
+    } : {})
+  };
 
   // Defensive: if input has an unexpected shape, show a simple rejection message
   if ('edits' in input && input.edits != null) {
     return <FileEditToolUseRejectedMessage file_path={filePath} operation="update" firstLine={null} verbose={verbose} />;
   }
-  const isNewFile = oldString === '';
+  const isNewFile = getEditMode(editInput) === 'replace' && oldString === '';
 
   // For new file creation, show content preview instead of diff
   if (isNewFile) {
     return <FileEditToolUseRejectedMessage file_path={filePath} operation="write" content={newString} firstLine={firstLineOf(newString)} verbose={verbose} />;
   }
-  return <EditRejectionDiff filePath={filePath} oldString={oldString} newString={newString} replaceAll={replaceAll} style={style} verbose={verbose} />;
+  return <EditRejectionDiff input={editInput} style={style} verbose={verbose} />;
 }
 export function renderToolUseErrorMessage(result: ToolResultBlockParam['content'], options: {
   progressMessagesForMessage: ProgressMessage[];
@@ -160,20 +179,16 @@ type RejectionDiffData = {
 function EditRejectionDiff(t0) {
   const $ = _c(16);
   const {
-    filePath,
-    oldString,
-    newString,
-    replaceAll,
+    input,
     style,
     verbose
   } = t0;
+  const filePath = input.file_path;
   let t1;
-  if ($[0] !== filePath || $[1] !== newString || $[2] !== oldString || $[3] !== replaceAll) {
-    t1 = () => loadRejectionDiff(filePath, oldString, newString, replaceAll);
+  if ($[0] !== filePath || $[1] !== input) {
+    t1 = () => loadRejectionDiff(input);
     $[0] = filePath;
-    $[1] = newString;
-    $[2] = oldString;
-    $[3] = replaceAll;
+    $[1] = input;
     $[4] = t1;
   } else {
     t1 = $[4];
@@ -238,21 +253,22 @@ function EditRejectionBody(t0) {
   }
   return t1;
 }
-async function loadRejectionDiff(filePath: string, oldString: string, newString: string, replaceAll: boolean): Promise<RejectionDiffData> {
+async function loadRejectionDiff(input: FileEditInput): Promise<RejectionDiffData> {
+  const filePath = input.file_path;
+  const target = input.old_string ?? input.insert_before ?? input.insert_after ?? '';
   try {
     // Chunked read — context window around the first occurrence. replaceAll
-    // still shows matches *within* the window via getPatchForEdit; we accept
+    // still shows matches *within* the window via getPatchForInput; we accept
     // losing the all-occurrences view to keep the read bounded.
-    const ctx = await readEditContext(filePath, oldString, CONTEXT_LINES);
+    const ctx = await readEditContext(filePath, target, CONTEXT_LINES);
     if (ctx === null || ctx.truncated || ctx.content === '') {
       // ENOENT / not found / truncated — diff just the tool inputs.
       const {
         patch
-      } = getPatchForEdit({
+      } = getPatchForInput({
         filePath,
-        fileContents: oldString,
-        oldString,
-        newString
+        fileContents: target,
+        input
       });
       return {
         patch,
@@ -260,16 +276,12 @@ async function loadRejectionDiff(filePath: string, oldString: string, newString:
         fileContent: undefined
       };
     }
-    const actualOld = findActualString(ctx.content, oldString) || oldString;
-    const actualNew = preserveQuoteStyle(oldString, actualOld, newString);
     const {
       patch
-    } = getPatchForEdit({
+    } = getPatchForInput({
       filePath,
       fileContents: ctx.content,
-      oldString: actualOld,
-      newString: actualNew,
-      replaceAll
+      input
     });
     return {
       patch: adjustHunkLineNumbers(patch, ctx.lineOffset - 1),
