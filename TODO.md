@@ -2,6 +2,10 @@
 
 ## Priority 1
 
+- Slim Lupin into a clearer core product shape.
+  Done: rebranded key user-facing entrypoints to Lupin, rewrote the root README/guide around the actual product, and removed obvious legacy leak-case-study assets.
+  Next: split top-level areas into `core`, `optional/gated`, and `legacy/removable`, then disable or extract non-essential subsystems like KAIROS/assistant, buddy, voice, and bridge/remote from the default path before deleting anything.
+
 - Strengthen editing reliability for implementation tasks.
   Done: added implementation workflow guardrails, a partial-edit tool for existing files, and anchored insert-before/after edits.
   Next: support unified-diff style edits and better conflict handling when the target text is no longer unique.
@@ -38,6 +42,9 @@
   Build concise summaries for large repos from inspected files rather than raw README excerpts.
 
 ## Priority 3
+
+- Audit optional subsystems before hard deletion.
+  Map what `dream`, assistant/KAIROS, buddy, voice, bridge, remote, and restore-core actually do in runtime, then decide what belongs in a minimal Lupin profile versus a power-user build.
 
 - Add session introspection and debugging.
   Expose recent tool calls, failures, and reasoning breadcrumbs in a compact way so behavior is easier to diagnose.

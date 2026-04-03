@@ -1,13 +1,13 @@
-# Guide: Start The Assistant
+# Guide: Run Lupin Locally
 
-This guide shows exactly how to run your local assistant with Ollama and coding-agent mode.
+This guide covers the runnable local scaffold that exists in this repo today: `restore-core/`.
 
 ## 1. Open two terminals
 
-- Terminal A: run Ollama server
-- Terminal B: run the assistant
+- Terminal A: run Ollama
+- Terminal B: run Lupin
 
-## 2. Terminal A (Ollama)
+## 2. Terminal A
 
 Start Ollama:
 
@@ -15,67 +15,60 @@ Start Ollama:
 ollama serve
 ```
 
-If you do not have a model yet:
+Pull a model if needed:
 
 ```bash
 ollama pull llama3.2
 ```
 
-## 3. Terminal B (Assistant)
+## 3. Terminal B
 
-Go to your project:
+From the repository root:
 
 ```bash
 cd /Users/albz/Code/ClaudIA
+node restore-core/src/index.mjs
 ```
 
-Start the assistant:
+Or use the local package entrypoint:
 
 ```bash
-node mvp-assistant/assistant-cli.mjs
+cd /Users/albz/Code/ClaudIA/restore-core
+npm run start
 ```
 
-## 4. Enable LLM + coding agent inside the CLI
+## 4. Useful commands inside Lupin
 
-At the `assistant>` prompt:
+- `/health`
+- `/init`
+- `/context`
+- `/files [regex]`
+- `/read <path>`
+- `/grep <pattern> [--path <path>]`
+- `/bash <command>`
+- `/mode code`
+- `/mode chat`
+- `/mode auto`
+- `/ask <prompt>`
+- `/mg help`
+
+## 5. First tasks to try
 
 ```text
-/llm on
-/model llama3.2
-/agent on
+/init
+/context
+/code inspect this repository and list key entry files
 ```
 
-Check status:
+## 6. Environment defaults
 
-```text
-/llm status
-/agent status
-```
-
-## 5. Run your first coding task
-
-Example:
-
-```text
-/code find where BashTool is registered and return the file path
-```
-
-## 6. Useful commands
-
-- `/help` show all commands
-- `/ask <prompt>` ask Ollama directly (no tool loop)
-- `/code <task>` run tool-based coding task
-- `/note add <text>` save a note
-- `/todo add <text>` add a todo
-- `/exit` close the assistant
+- `OLLAMA_BASE_URL=http://127.0.0.1:11434`
+- `OLLAMA_MODEL=llama3.2`
+- `AGENT_MODE=code`
+- `AGENT_DENY_DANGEROUS_BASH=1`
 
 ## Troubleshooting
 
-- Ollama unreachable:
-Ensure `ollama serve` is running.
-Check `/llm status`.
-Pull model again: `ollama pull llama3.2`.
-- Wrong Ollama URL:
-Set it in CLI: `/ollama-url http://127.0.0.1:11434`.
-- Different model:
-Set it in CLI: `/model qwen2.5-coder:7b`.
+- If Ollama is unreachable, make sure `ollama serve` is running and pull a model again.
+- If you want a different model, set `OLLAMA_MODEL` before launch.
+- If you want to target another project, run `node restore-core/src/index.mjs --project-root /absolute/path/to/project`.
