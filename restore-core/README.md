@@ -1,4 +1,4 @@
-# Lupin
+    # Lupin
 
 Local coding-agent scaffold with a sharper personal identity and Claude Code-inspired workflow.
 

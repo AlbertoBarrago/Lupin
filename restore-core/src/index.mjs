@@ -50,25 +50,53 @@ function pickRandom(list) {
 function printHelp() {
   console.log(
     [
-      'Commands:',
-      '/help                       Show this help',
-      '/exit                       Exit',
-      '/status                     Show model/workspace status',
-      '/context                    Show repo context and loaded instruction files',
-      '/init                       Analyze workspace and create/update LUPIN.md',
-      '/model [name]               Get or set Ollama model',
-      '/health                     Check Ollama connectivity',
-      '/mode [code|chat|auto]      Get or set interaction mode',
-      '/ask <prompt>               Direct chat response (no tool loop)',
-      '/code <task>                Run coding task (tool loop)',
-      '/files [regex]              List files (optional regex filter)',
-      '/read <path>                Read a file directly',
-      '/grep <pattern> [--path p]  Search text directly',
-      '/bash <command>             Run shell command directly',
+      'Usage: lupin [options]',
+      '',
+      'Options:',
+      '  --help                      Show this help and exit',
+      '  --init                      Analyze workspace, write LUPIN.md, and exit',
+      '  --context                   Print workspace context and exit',
+      '  --task <prompt>             Run a single task non-interactively and exit',
+      '  --model <name>              Override the Ollama model for this run',
+      '',
+      'Interactive commands:',
+      '  /help                       Show this help',
+      '  /exit                       Exit',
+      '  /status                     Show model/workspace status',
+      '  /context                    Show repo context and loaded instruction files',
+      '  /init                       Analyze workspace and create/update LUPIN.md',
+      '  /model [name]               Get or set Ollama model',
+      '  /health                     Check Ollama connectivity',
+      '  /mode [code|chat|auto]      Get or set interaction mode',
+      '  /ask <prompt>               Direct chat response (no tool loop)',
+      '  /code <task>                Run coding task (tool loop)',
+      '  /files [regex]              List files (optional regex filter)',
+      '  /read <path>                Read a file directly',
+      '  /grep <pattern> [--path p]  Search text directly',
+      '  /bash <command>             Run shell command directly',
       '',
       'Default mode is code. Non-command input follows current mode.',
     ].join('\n'),
   )
+}
+
+function parseArgv(argv) {
+  const args = argv.slice(2)
+  const result = { help: false, init: false, context: false, task: null, model: null }
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--help' || args[i] === '-h') {
+      result.help = true
+    } else if (args[i] === '--init') {
+      result.init = true
+    } else if (args[i] === '--context') {
+      result.context = true
+    } else if (args[i] === '--task' && args[i + 1]) {
+      result.task = args[++i]
+    } else if (args[i] === '--model' && args[i + 1]) {
+      result.model = args[++i]
+    }
+  }
+  return result
 }
 
 function detectCodingIntent(text) {
@@ -185,7 +213,17 @@ function parseGrepInput(raw) {
 }
 
 async function main() {
+  const flags = parseArgv(process.argv)
+
+  if (flags.help) {
+    printHelp()
+    process.exit(0)
+  }
+
   const config = loadConfig()
+  if (flags.model) {
+    config.ollama.model = flags.model
+  }
   const startupLogo = pickRandom(STARTUP_LOGOS)
 
   const model = new OllamaAdapter(config.ollama)
@@ -204,6 +242,55 @@ async function main() {
   const sessionStore = new SessionStore(APP_ROOT, config.projectRoot)
   await sessionStore.init()
   const workspaceContext = toolRuntime.getWorkspaceContext()
+
+  // --context: print workspace context and exit
+  if (flags.context) {
+    console.log(`Workspace: ${config.projectRoot}`)
+    console.log(`Git root: ${workspaceContext.gitRoot || 'not detected'}`)
+    console.log(`Markers: ${workspaceContext.markers.length ? workspaceContext.markers.join(', ') : 'none'}`)
+    console.log(`README summary: ${workspaceContext.readmeSummary || 'not available'}`)
+    console.log('Top-level entries:')
+    for (const entry of workspaceContext.topLevel.slice(0, 16)) {
+      console.log(`- ${entry}`)
+    }
+    console.log('Instruction files:')
+    if (workspaceContext.instructionFiles?.length) {
+      for (const file of workspaceContext.instructionFiles) {
+        console.log(`- ${file.path}`)
+      }
+    } else {
+      console.log('- none')
+    }
+    process.exit(0)
+  }
+
+  // --init: write LUPIN.md and exit
+  if (flags.init) {
+    const snapshot = initWorkspace(config.projectRoot, workspaceContext)
+    const lupinMdPath = path.join(config.projectRoot, 'LUPIN.md')
+    let previousContent = ''
+    try {
+      previousContent = await fs.promises.readFile(lupinMdPath, 'utf8')
+    } catch {}
+    const lupinMdContent = renderLupinMd(snapshot, previousContent)
+    await fs.promises.writeFile(lupinMdPath, lupinMdContent + '\n', 'utf8')
+    sessionStore.setWorkspaceSnapshot(snapshot)
+    await sessionStore.save()
+    console.log(`Initialized workspace instructions: ${lupinMdPath}`)
+    console.log(formatWorkspaceSnapshot(snapshot))
+    process.exit(0)
+  }
+
+  // --task: run single task non-interactively and exit
+  if (flags.task) {
+    const history = sessionStore.getModelHistory(config.agent.maxHistory)
+    const result = await queryEngine.runTask(flags.task, history)
+    console.log(result.answer)
+    sessionStore.appendWithMeta('user', flags.task, { kind: 'code', mode: 'code' })
+    sessionStore.appendWithMeta('assistant', result.answer, { kind: 'code', mode: 'code' })
+    await sessionStore.save()
+    process.exit(0)
+  }
 
   console.log(startupLogo)
   console.log('Lupin // local coding agent')
@@ -450,7 +537,6 @@ async function main() {
         }
 
         let answer
-        let responseKind = 'code'
         if (input.startsWith('/code ')) {
           sessionStore.appendWithMeta('user', task, { kind: 'code', mode: 'code' })
           const history = sessionStore.getModelHistory(config.agent.maxHistory)
@@ -463,7 +549,6 @@ async function main() {
             buildGreetingReply(task) ||
             (await runChatReply(model, sessionStore, task, config.agent.maxHistory))
           sessionStore.appendWithMeta('assistant', answer, { kind: 'chat', mode: 'chat' })
-          responseKind = 'chat'
         } else if (mode === 'auto') {
           if (detectCodingIntent(task)) {
             sessionStore.appendWithMeta('user', task, { kind: 'code', mode: 'auto' })
@@ -477,16 +562,14 @@ async function main() {
               buildGreetingReply(task) ||
               (await runChatReply(model, sessionStore, task, config.agent.maxHistory))
             sessionStore.appendWithMeta('assistant', answer, { kind: 'chat', mode: 'auto' })
-            responseKind = 'chat'
-          }
+            }
         } else {
           const greetingReply = buildGreetingReply(task)
           if (greetingReply) {
             sessionStore.appendWithMeta('user', task, { kind: 'chat', mode: 'code' })
             answer = greetingReply
             sessionStore.appendWithMeta('assistant', answer, { kind: 'chat', mode: 'code' })
-            responseKind = 'chat'
-          } else {
+            } else {
             sessionStore.appendWithMeta('user', task, { kind: 'code', mode: 'code' })
             const history = sessionStore.getModelHistory(config.agent.maxHistory)
             const result = await queryEngine.runTask(task, history)
@@ -494,14 +577,7 @@ async function main() {
             sessionStore.appendWithMeta('assistant', answer, { kind: 'code', mode: 'code' })
           }
         }
-        const mgTicked = tickCompanion(sessionStore.getMgCompanion())
-        sessionStore.setMgCompanion(mgTicked)
-        await sessionStore.save()
         console.log(answer)
-        const extra = ambientLine(sessionStore.getMgCompanion())
-        if (shouldShowAmbientLine(responseKind) && extra && Math.random() < 0.35) {
-          console.log(`[mg] ${extra}`)
-        }
         await sessionStore.save()
         safePrompt()
       })
