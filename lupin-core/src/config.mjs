@@ -37,21 +37,16 @@ function inferProjectRoot() {
 }
 
 export function loadConfig() {
-  const defaultModeRaw = (process.env.AGENT_MODE || 'code').toLowerCase()
-  const defaultMode =
-    defaultModeRaw === 'chat' || defaultModeRaw === 'auto' ? defaultModeRaw : 'code'
-
   return {
     projectRoot: process.env.AGENT_PROJECT_ROOT || inferProjectRoot(),
     ollama: {
       baseUrl: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
-      model: process.env.OLLAMA_MODEL || 'llama3.2',
+      model: process.env.OLLAMA_MODEL || 'qwen2.5-coder:7b',
       timeoutMs: Number.parseInt(process.env.OLLAMA_TIMEOUT_MS || '20000', 10),
     },
     agent: {
       maxSteps: Number.parseInt(process.env.AGENT_MAX_STEPS || '30', 10),
       maxHistory: Number.parseInt(process.env.AGENT_MAX_HISTORY || '16', 10),
-      defaultMode,
     },
     security: {
       denyDangerousBash: process.env.AGENT_DENY_DANGEROUS_BASH !== '0',

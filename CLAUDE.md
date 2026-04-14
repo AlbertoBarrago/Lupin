@@ -19,7 +19,7 @@ Requires a running Ollama instance:
 
 ```bash
 ollama serve
-ollama pull llama3.2   # default model
+ollama pull qwen2.5-coder:7b   # default model
 ```
 
 Non-interactive single task:
@@ -39,9 +39,8 @@ node lupin-core/src/index.mjs --project-root /path/to/project
 | Variable | Default | Effect |
 |---|---|---|
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama endpoint |
-| `OLLAMA_MODEL` | `llama3.2` | Model name |
+| `OLLAMA_MODEL` | `qwen2.5-coder:7b` | Model name |
 | `OLLAMA_TIMEOUT_MS` | `20000` | Request timeout |
-| `AGENT_MODE` | `code` | Default mode: `code`, `chat`, `auto` |
 | `AGENT_MAX_STEPS` | `30` | Max tool-use steps per task |
 | `AGENT_MAX_HISTORY` | `16` | Messages kept in session history |
 | `AGENT_DENY_DANGEROUS_BASH` | `1` | Block risky shell commands |

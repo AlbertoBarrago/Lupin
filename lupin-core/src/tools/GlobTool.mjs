@@ -15,7 +15,7 @@ function compileOptionalRegex(pattern) {
 
 export const GlobTool = {
   name: 'GlobTool',
-  description: 'List workspace files and optionally filter by regex.',
+  description: 'List workspace files and optionally filter by a JavaScript regex (NOT glob). Examples: pattern "\\.html$" matches .html files, "\\.(js|ts)$" matches .js or .ts files. Do not use glob syntax like *.html.',
   schema: {
     type: 'object',
     properties: {

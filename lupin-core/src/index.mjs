@@ -13,6 +13,8 @@ import { BashTool } from './tools/BashTool.mjs'
 import { FileEditTool } from './tools/FileEditTool.mjs'
 import { FileReadTool } from './tools/FileReadTool.mjs'
 import { FileWriteTool } from './tools/FileWriteTool.mjs'
+import { FileBatchReadTool } from './tools/FileBatchReadTool.mjs'
+import { FileDeleteTool } from './tools/FileDeleteTool.mjs'
 import { GlobTool } from './tools/GlobTool.mjs'
 import { GrepTool } from './tools/GrepTool.mjs'
 import {
@@ -20,6 +22,43 @@ import {
   initWorkspace,
   renderLupinMd,
 } from './core/workspaceInit.mjs'
+
+function createSpinner(label = 'thinking') {
+  const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+  let i = 0
+  let interval = null
+  return {
+    start(text = label) {
+      if (!process.stdout.isTTY) return
+      process.stdout.write('\x1b[?25l') // hide cursor
+      interval = setInterval(() => {
+        process.stdout.write(`\r\x1b[38;5;245m${frames[i++ % frames.length]} ${text}\x1b[0m`)
+      }, 80)
+    },
+    update(text) {
+      if (!process.stdout.isTTY || !interval) return
+      process.stdout.write(`\r\x1b[38;5;245m${frames[i % frames.length]} ${text}\x1b[0m`)
+    },
+    stop() {
+      if (!interval) return
+      clearInterval(interval)
+      interval = null
+      process.stdout.write('\r\x1b[2K') // clear line
+      process.stdout.write('\x1b[?25h') // show cursor
+    },
+  }
+}
+
+async function writeOrRefreshLupinMd(projectRoot, snapshot) {
+  const lupinMdPath = path.join(projectRoot, 'LUPIN.md')
+  let previousContent = ''
+  try {
+    previousContent = await fs.promises.readFile(lupinMdPath, 'utf8')
+  } catch {}
+  const lupinMdContent = renderLupinMd(snapshot, previousContent)
+  await fs.promises.writeFile(lupinMdPath, lupinMdContent + '\n', 'utf8')
+  return lupinMdPath
+}
 
 const STARTUP_LOGOS = [
   [
@@ -65,17 +104,16 @@ function printHelp() {
       '  /status                     Show model/workspace status',
       '  /context                    Show repo context and loaded instruction files',
       '  /init                       Analyze workspace and create/update LUPIN.md',
+      '  /refresh                    Re-analyze workspace and update LUPIN.md if it exists',
       '  /model [name]               Get or set Ollama model',
       '  /health                     Check Ollama connectivity',
-      '  /mode [code|chat|auto]      Get or set interaction mode',
-      '  /ask <prompt>               Direct chat response (no tool loop)',
-      '  /code <task>                Run coding task (tool loop)',
+      '  /code <task>                Run a task explicitly',
       '  /files [regex]              List files (optional regex filter)',
       '  /read <path>                Read a file directly',
       '  /grep <pattern> [--path p]  Search text directly',
       '  /bash <command>             Run shell command directly',
       '',
-      'Default mode is code. Non-command input follows current mode.',
+      'All input runs as a coding task.',
     ].join('\n'),
   )
 }
@@ -99,71 +137,10 @@ function parseArgv(argv) {
   return result
 }
 
-function detectCodingIntent(text) {
-  const value = String(text || '').toLowerCase()
-  return (
-    value.includes('code') ||
-    value.includes('project') ||
-    value.includes('repository') ||
-    value.includes('repo') ||
-    value.includes('codebase') ||
-    value.includes('file') ||
-    value.includes('refactor') ||
-    value.includes('debug') ||
-    value.includes('fix') ||
-    value.includes('implement') ||
-    value.includes('search in repo') ||
-    value.includes('grep') ||
-    value.includes('bash') ||
-    value.includes('function') ||
-    value.includes('class') ||
-    value.includes('typescript') ||
-    value.includes('javascript') ||
-    value.includes('python') ||
-    value.includes('interesting') ||
-    value.includes('good project') ||
-    value.includes('why is this')
-  )
-}
-
 function normalizeUserInput(text) {
   return String(text || '')
     .replace(/^\s*assistant>\s*/i, '')
     .trim()
-}
-
-function detectGreetingLanguage(text) {
-  const value = String(text || '').trim().toLowerCase()
-  if (
-    /^(ciao|salve|ehi|hey|hola|buond[iì]|buonasera|buongiorno)([!. ]|$)/i.test(value)
-  ) {
-    return 'it'
-  }
-  if (/^(hi|hello|hey|yo|sup)([!. ]|$)/i.test(value)) {
-    return 'en'
-  }
-  return null
-}
-
-function buildGreetingReply(text) {
-  const lang = detectGreetingLanguage(text)
-  if (lang === 'it') return 'Ciao. Dimmi pure cosa ti serve.'
-  if (lang === 'en') return 'Hey. Tell me what you need.'
-  return null
-}
-
-async function runChatReply(model, sessionStore, prompt, maxHistory) {
-  const history = sessionStore.getModelHistory(maxHistory, { kinds: ['chat'] })
-  const messages = [
-    {
-      role: 'system',
-      content:
-        'You are Lupin in chat mode inside a coding CLI. Answer clearly, directly, and practically in the user language. Be natural and conversational, not robotic. For simple greetings or casual messages, reply warmly and continue the conversation with one useful follow-up. Do not roleplay as a game, menu, or interactive fiction system. Do not emit help menus unless the user explicitly asks for help with commands. Keep replies concise, but avoid flat one-liners that add no value.',
-    },
-    ...history,
-    { role: 'user', content: prompt },
-  ]
-  return model.chat(messages, { options: { temperature: 0.55 } })
 }
 
 function renderDirectToolResult(payload) {
@@ -229,19 +206,21 @@ async function main() {
   const model = new OllamaAdapter(config.ollama)
   const toolRuntime = new ToolRuntime({
     projectRoot: config.projectRoot,
-    tools: [BashTool, FileEditTool, FileReadTool, FileWriteTool, GlobTool, GrepTool],
+    tools: [BashTool, FileBatchReadTool, FileDeleteTool, FileEditTool, FileReadTool, FileWriteTool, GlobTool, GrepTool],
     securityConfig: config.security,
-    debug: config.debug,
-  })
-  const queryEngine = new QueryEngine({
-    modelAdapter: model,
-    toolRuntime,
-    maxSteps: config.agent.maxSteps,
     debug: config.debug,
   })
   const sessionStore = new SessionStore(APP_ROOT, config.projectRoot)
   await sessionStore.init()
   const workspaceContext = toolRuntime.getWorkspaceContext()
+  let currentSnapshot = initWorkspace(config.projectRoot, workspaceContext)
+  const queryEngine = new QueryEngine({
+    modelAdapter: model,
+    toolRuntime,
+    maxSteps: config.agent.maxSteps,
+    debug: config.debug,
+    initSnapshot: currentSnapshot,
+  })
 
   // --context: print workspace context and exit
   if (flags.context) {
@@ -266,18 +245,11 @@ async function main() {
 
   // --init: write LUPIN.md and exit
   if (flags.init) {
-    const snapshot = initWorkspace(config.projectRoot, workspaceContext)
-    const lupinMdPath = path.join(config.projectRoot, 'LUPIN.md')
-    let previousContent = ''
-    try {
-      previousContent = await fs.promises.readFile(lupinMdPath, 'utf8')
-    } catch {}
-    const lupinMdContent = renderLupinMd(snapshot, previousContent)
-    await fs.promises.writeFile(lupinMdPath, lupinMdContent + '\n', 'utf8')
-    sessionStore.setWorkspaceSnapshot(snapshot)
+    const lupinMdPath = await writeOrRefreshLupinMd(config.projectRoot, currentSnapshot)
+    sessionStore.setWorkspaceSnapshot(currentSnapshot)
     await sessionStore.save()
     console.log(`Initialized workspace instructions: ${lupinMdPath}`)
-    console.log(formatWorkspaceSnapshot(snapshot))
+    console.log(formatWorkspaceSnapshot(currentSnapshot))
     process.exit(0)
   }
 
@@ -297,7 +269,6 @@ async function main() {
   console.log(`Workspace: ${config.projectRoot}`)
   console.log(`Git root: ${workspaceContext.gitRoot || 'not detected'}`)
   console.log(`Ollama: ${config.ollama.baseUrl} | model: ${config.ollama.model}`)
-  console.log(`Mode: ${config.agent.defaultMode}`)
   console.log('Type /help to get started.')
 
   const rl = readline.createInterface({
@@ -315,7 +286,6 @@ async function main() {
   safePrompt()
 
   let queue = Promise.resolve()
-  let mode = config.agent.defaultMode
   let currentWorkspaceContext = workspaceContext
 
   rl.on('line', line => {
@@ -347,7 +317,6 @@ async function main() {
           console.log(`Ollama URL: ${model.baseUrl}`)
           console.log(`Model: ${model.model}`)
           console.log(`Max steps: ${config.agent.maxSteps}`)
-          console.log(`Mode: ${mode}`)
           const snapshot = sessionStore.getWorkspaceSnapshot()
           if (snapshot) {
             console.log(formatWorkspaceSnapshot(snapshot))
@@ -388,19 +357,32 @@ async function main() {
         }
 
         if (input === '/init') {
-          const snapshot = initWorkspace(config.projectRoot, currentWorkspaceContext)
-          const lupinMdPath = path.join(config.projectRoot, 'LUPIN.md')
-          let previousContent = ''
-          try {
-            previousContent = await fs.promises.readFile(lupinMdPath, 'utf8')
-          } catch {}
-          const lupinMdContent = renderLupinMd(snapshot, previousContent)
-          await fs.promises.writeFile(lupinMdPath, lupinMdContent + '\n', 'utf8')
-          sessionStore.setWorkspaceSnapshot(snapshot)
+          currentSnapshot = initWorkspace(config.projectRoot, currentWorkspaceContext)
+          const lupinMdPath = await writeOrRefreshLupinMd(config.projectRoot, currentSnapshot)
+          queryEngine.setSnapshot(currentSnapshot)
+          sessionStore.setWorkspaceSnapshot(currentSnapshot)
           currentWorkspaceContext = toolRuntime.refreshWorkspaceContext()
           await sessionStore.save()
           console.log(`Initialized workspace instructions: ${lupinMdPath}`)
-          console.log(formatWorkspaceSnapshot(snapshot))
+          console.log(formatWorkspaceSnapshot(currentSnapshot))
+          safePrompt()
+          return
+        }
+
+        if (input === '/refresh') {
+          currentSnapshot = initWorkspace(config.projectRoot, currentWorkspaceContext)
+          queryEngine.setSnapshot(currentSnapshot)
+          const lupinMdPath = path.join(config.projectRoot, 'LUPIN.md')
+          const lupinMdExists = fs.existsSync(lupinMdPath)
+          if (lupinMdExists) {
+            await writeOrRefreshLupinMd(config.projectRoot, currentSnapshot)
+            currentWorkspaceContext = toolRuntime.refreshWorkspaceContext()
+            await sessionStore.save()
+            console.log(`Refreshed snapshot and updated ${lupinMdPath}`)
+          } else {
+            await sessionStore.save()
+            console.log('Snapshot refreshed. Run /init to generate LUPIN.md.')
+          }
           safePrompt()
           return
         }
@@ -422,49 +404,6 @@ async function main() {
           const ok = await model.healthcheck()
           console.log(ok ? 'Ollama is reachable.' : 'Ollama is unreachable.')
           await sessionStore.save()
-          safePrompt()
-          return
-        }
-
-        if (input.startsWith('/mode')) {
-          const value = input.replace(/^\/mode\s*/, '').trim().toLowerCase()
-          if (!value) {
-            console.log(`Current mode: ${mode}`)
-            await sessionStore.save()
-            safePrompt()
-            return
-          }
-          if (!['code', 'chat', 'auto'].includes(value)) {
-            console.log('Usage: /mode [code|chat|auto]')
-            await sessionStore.save()
-            safePrompt()
-            return
-          }
-          mode = value
-          console.log(`Mode set to: ${mode}`)
-          await sessionStore.save()
-          safePrompt()
-          return
-        }
-
-        if (input.startsWith('/ask ')) {
-          const prompt = input.slice('/ask '.length).trim()
-          if (!prompt) {
-            console.log('Usage: /ask <prompt>')
-            await sessionStore.save()
-            safePrompt()
-            return
-          }
-          sessionStore.appendWithMeta('user', prompt, { kind: 'chat', mode: 'chat' })
-          const answer = await runChatReply(
-            model,
-            sessionStore,
-            prompt,
-            config.agent.maxHistory,
-          )
-          sessionStore.appendWithMeta('assistant', answer, { kind: 'chat', mode: 'chat' })
-          await sessionStore.save()
-          console.log(answer)
           safePrompt()
           return
         }
@@ -536,52 +475,28 @@ async function main() {
           return
         }
 
-        let answer
-        if (input.startsWith('/code ')) {
-          sessionStore.appendWithMeta('user', task, { kind: 'code', mode: 'code' })
-          const history = sessionStore.getModelHistory(config.agent.maxHistory)
-          const result = await queryEngine.runTask(task, history)
-          answer = result.answer
-          sessionStore.appendWithMeta('assistant', answer, { kind: 'code', mode: 'code' })
-        } else if (mode === 'chat') {
-          sessionStore.appendWithMeta('user', task, { kind: 'chat', mode: 'chat' })
-          answer =
-            buildGreetingReply(task) ||
-            (await runChatReply(model, sessionStore, task, config.agent.maxHistory))
-          sessionStore.appendWithMeta('assistant', answer, { kind: 'chat', mode: 'chat' })
-        } else if (mode === 'auto') {
-          if (detectCodingIntent(task)) {
-            sessionStore.appendWithMeta('user', task, { kind: 'code', mode: 'auto' })
-            const history = sessionStore.getModelHistory(config.agent.maxHistory)
-            const result = await queryEngine.runTask(task, history)
-            answer = result.answer
-            sessionStore.appendWithMeta('assistant', answer, { kind: 'code', mode: 'auto' })
-          } else {
-            sessionStore.appendWithMeta('user', task, { kind: 'chat', mode: 'auto' })
-            answer =
-              buildGreetingReply(task) ||
-              (await runChatReply(model, sessionStore, task, config.agent.maxHistory))
-            sessionStore.appendWithMeta('assistant', answer, { kind: 'chat', mode: 'auto' })
-            }
-        } else {
-          const greetingReply = buildGreetingReply(task)
-          if (greetingReply) {
-            sessionStore.appendWithMeta('user', task, { kind: 'chat', mode: 'code' })
-            answer = greetingReply
-            sessionStore.appendWithMeta('assistant', answer, { kind: 'chat', mode: 'code' })
-            } else {
-            sessionStore.appendWithMeta('user', task, { kind: 'code', mode: 'code' })
-            const history = sessionStore.getModelHistory(config.agent.maxHistory)
-            const result = await queryEngine.runTask(task, history)
-            answer = result.answer
-            sessionStore.appendWithMeta('assistant', answer, { kind: 'code', mode: 'code' })
-          }
+        const spinner = createSpinner()
+        sessionStore.appendWithMeta('user', task, { kind: 'code' })
+        const history = sessionStore.getModelHistory(config.agent.maxHistory)
+        spinner.start('working')
+        const taskResult = await queryEngine.runTask(task, history)
+        spinner.stop()
+        const answer = taskResult.answer
+        sessionStore.appendWithMeta('assistant', answer, { kind: 'code' })
+
+        // Silently refresh snapshot when Lupin inspected files — keeps future prompts richer
+        if (taskResult?.inspectedFiles?.length > 0) {
+          currentSnapshot = initWorkspace(config.projectRoot, currentWorkspaceContext)
+          queryEngine.setSnapshot(currentSnapshot)
         }
+
         console.log(answer)
         await sessionStore.save()
         safePrompt()
       })
       .catch(async error => {
+        // Ensure spinner is cleared on unexpected errors
+        process.stdout.write('\r\x1b[2K\x1b[?25h')
         console.log(`Error: ${String(error?.message || error)}`)
         try {
           await sessionStore.save()

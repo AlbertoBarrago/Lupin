@@ -2,6 +2,7 @@ import {
   extractJsonObject,
   isValidFinalShape,
   isValidToolCallShape,
+  normalizeShape,
 } from './jsonProtocol.mjs'
 import { buildSystemPrompt } from '../prompt/systemPrompt.mjs'
 
@@ -79,13 +80,15 @@ function buildProjectProbeInstruction(workspaceContext) {
 function isWeakFinalAnswer(answer) {
   const value = String(answer || '').trim().toLowerCase()
   if (!value) return true
-  return (
-    value === 'unknown' ||
-    value.startsWith('unknown.') ||
-    value.includes('no information about the project is available yet') ||
-    value.includes('inspected “init” file') ||
-    value.includes('inspected "init" file')
-  )
+  if (value === 'unknown') return true
+  if (value.startsWith('unknown.')) return true
+  if (value.includes('no information about the project is available yet')) return true
+  if (value.includes('inspected “init” file')) return true
+  if (value.includes('i apologize')) return true
+  if (value.includes('sorry')) return true
+  if (value.includes('let me try again')) return true
+  if (value.includes('let us try again')) return true
+  return false
 }
 
 function buildWorkspaceFallback(workspaceContext) {
@@ -129,20 +132,27 @@ function isVerificationBash(command) {
 }
 
 export class QueryEngine {
-  constructor({ modelAdapter, toolRuntime, maxSteps = 12, debug = false }) {
+  constructor({ modelAdapter, toolRuntime, maxSteps = 12, debug = false, initSnapshot = null }) {
     this.modelAdapter = modelAdapter
     this.toolRuntime = toolRuntime
     this.maxSteps = maxSteps
     this.debug = debug
+    this.initSnapshot = initSnapshot
+  }
+
+  setSnapshot(snapshot) {
+    this.initSnapshot = snapshot
   }
 
   async runTask(task, historyMessages = []) {
     const normalizedTask = normalizeTaskText(task)
     const workspaceContext = this.toolRuntime.getWorkspaceContext()
+    const workspaceIsEmpty = workspaceContext.topLevel.length === 0
     const implementationTask = looksLikeImplementationTask(normalizedTask)
     const systemPrompt = buildSystemPrompt(
       this.toolRuntime.listTools(),
       workspaceContext,
+      this.initSnapshot,
     )
     const messages = [
       { role: 'system', content: systemPrompt },
@@ -156,10 +166,17 @@ export class QueryEngine {
       })
     }
 
-    if (implementationTask) {
+    if (implementationTask && !workspaceIsEmpty) {
       messages.push({
         role: 'user',
         content: buildImplementationWorkflowInstruction(),
+      })
+    }
+
+    if (implementationTask && workspaceIsEmpty) {
+      messages.push({
+        role: 'user',
+        content: 'CREATION_TASK: the workspace is empty. Do not inspect — just create the required files directly using FileWriteTool. Write all files, then give a final answer.',
       })
     }
 
@@ -169,16 +186,21 @@ export class QueryEngine {
     let hasEditedFiles = false
     let hasVerifiedChanges = false
     const changedFiles = new Set()
+    const inspectedFiles = new Set()
+    const recentToolCalls = [] // loop detection
 
     for (let step = 1; step <= this.maxSteps; step++) {
+      if (this.debug) process.stderr.write(`[lupin] step ${step}/${this.maxSteps}\n`)
       const raw = await this.modelAdapter.chat(messages, {
         options: { temperature: 0.2 },
       })
+      if (this.debug) process.stderr.write(`[lupin] raw: ${raw.slice(0, 300)}\n`)
 
       let parsed
       try {
-        parsed = extractJsonObject(raw)
+        parsed = normalizeShape(extractJsonObject(raw))
       } catch {
+        if (this.debug) process.stderr.write(`[lupin] FORMAT_ERROR at step ${step}\n`)
         messages.push({ role: 'assistant', content: raw })
         messages.push({
           role: 'user',
@@ -189,7 +211,7 @@ export class QueryEngine {
       }
 
       if (isValidFinalShape(parsed)) {
-        if (implementationTask && inspectionCount === 0) {
+        if (implementationTask && inspectionCount === 0 && !workspaceIsEmpty) {
           messages.push({ role: 'assistant', content: JSON.stringify(parsed) })
           messages.push({
             role: 'user',
@@ -216,10 +238,27 @@ export class QueryEngine {
           answer,
           transcript: messages,
           steps: step,
+          inspectedFiles: [...inspectedFiles],
         }
       }
 
       if (isValidToolCallShape(parsed)) {
+        if (this.debug) process.stderr.write(`[lupin] tool: ${parsed.tool} args: ${JSON.stringify(parsed.args).slice(0, 120)}\n`)
+
+        // Loop detection: same tool + same args 3 times in a row = stuck
+        const callKey = `${parsed.tool}:${JSON.stringify(parsed.args)}`
+        recentToolCalls.push(callKey)
+        if (recentToolCalls.length > 3) recentToolCalls.shift()
+        if (recentToolCalls.length === 3 && recentToolCalls.every(k => k === callKey)) {
+          messages.push({ role: 'assistant', content: JSON.stringify(parsed) })
+          messages.push({
+            role: 'user',
+            content: `LOOP_DETECTED: you called ${parsed.tool} with identical args 3 times. This approach is not working. Stop repeating it and use a completely different tool or approach to make progress.`,
+          })
+          recentToolCalls.length = 0
+          continue
+        }
+
         const result = await this.toolRuntime.execute(parsed.tool, parsed.args || {})
         if (isInspectionTool(parsed.tool)) {
           inspectionCount += 1
@@ -232,6 +271,7 @@ export class QueryEngine {
         }
         if (parsed.tool === 'FileReadTool' && result?.ok) {
           const readPath = String(result.result?.path || '')
+          if (readPath) inspectedFiles.add(readPath)
           if ([...changedFiles].some(file => file === readPath)) {
             hasVerifiedChanges = true
           }
@@ -240,10 +280,10 @@ export class QueryEngine {
           hasVerifiedChanges = true
         }
         messages.push({ role: 'assistant', content: JSON.stringify(parsed) })
-        messages.push({
-          role: 'user',
-          content: `TOOL_RESULT ${parsed.tool}: ${JSON.stringify(result)}`,
-        })
+        const toolResultContent = result?.ok
+          ? `TOOL_RESULT ${parsed.tool}: ${JSON.stringify(result)}`
+          : `TOOL_ERROR ${parsed.tool}: ${result?.error || 'unknown error'}. Fix the arguments and retry — do not give up.`
+        messages.push({ role: 'user', content: toolResultContent })
         continue
       }
 
@@ -276,6 +316,7 @@ export class QueryEngine {
           answer,
           transcript: messages,
           steps: this.maxSteps,
+          inspectedFiles: [...inspectedFiles],
         }
       }
     } catch {}
@@ -285,6 +326,7 @@ export class QueryEngine {
         'I reached the step limit before finishing. Try refining the task or using /status to verify model connectivity.',
       transcript: messages,
       steps: this.maxSteps,
+      inspectedFiles: [...inspectedFiles],
     }
   }
 }
