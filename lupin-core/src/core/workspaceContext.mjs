@@ -53,6 +53,43 @@ function detectGitRoot(projectRoot) {
   }
 }
 
+const SOURCE_EXTENSIONS = /\.(js|mjs|cjs|ts|tsx|jsx|html|css|scss|json|md|py|go|rs|rb|sh|yaml|yml|toml|env\.example)$/i
+const SKIP_PRELOAD = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__', 'coverage', '.turbo'])
+const PRELOAD_MAX_FILES = 20
+const PRELOAD_MAX_BYTES = 80 * 1024 // 80KB total
+
+export function preloadWorkspaceFiles(projectRoot) {
+  const files = []
+  let totalBytes = 0
+
+  function walk(dir) {
+    let entries
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const entry of entries) {
+      if (SKIP_PRELOAD.has(entry.name) || entry.name.startsWith('.')) continue
+      const abs = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(abs)
+      } else if (SOURCE_EXTENSIONS.test(entry.name)) {
+        try {
+          const content = fs.readFileSync(abs, 'utf8')
+          totalBytes += Buffer.byteLength(content)
+          if (totalBytes > PRELOAD_MAX_BYTES) return
+          files.push({ path: path.relative(projectRoot, abs), content })
+          if (files.length >= PRELOAD_MAX_FILES) return
+        } catch {}
+      }
+    }
+  }
+
+  walk(path.resolve(projectRoot))
+
+  if (totalBytes > PRELOAD_MAX_BYTES || files.length >= PRELOAD_MAX_FILES) {
+    return null // workspace too large — let model inspect normally
+  }
+  return files.length > 0 ? files : null
+}
+
 export function buildWorkspaceContext(projectRoot) {
   const resolvedRoot = path.resolve(projectRoot)
   const entries = readTopLevelEntries(resolvedRoot)

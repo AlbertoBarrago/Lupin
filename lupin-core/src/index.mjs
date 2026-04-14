@@ -23,6 +23,20 @@ import {
   renderLupinMd,
 } from './core/workspaceInit.mjs'
 
+function formatToolLabel(toolName, args) {
+  const short = {
+    FileWriteTool: () => `writing ${args?.path || ''}`,
+    FileEditTool: () => `editing ${args?.path || ''}`,
+    FileReadTool: () => `reading ${args?.path || ''}`,
+    FileDeleteTool: () => `deleting ${args?.path || ''}`,
+    FileBatchReadTool: () => `reading ${args?.pattern || ''}`,
+    GlobTool: () => `scanning files`,
+    GrepTool: () => `searching ${args?.pattern || ''}`,
+    BashTool: () => `$ ${String(args?.command || '').slice(0, 40)}`,
+  }
+  return short[toolName]?.() ?? toolName
+}
+
 function createSpinner(label = 'thinking') {
   const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
   let i = 0
@@ -479,18 +493,41 @@ async function main() {
         sessionStore.appendWithMeta('user', task, { kind: 'code' })
         const history = sessionStore.getModelHistory(config.agent.maxHistory)
         spinner.start('working')
-        const taskResult = await queryEngine.runTask(task, history)
+
+        let streamingActive = false
+        const onFinalToken = (event) => {
+          if (event.type === 'start') {
+            spinner.stop()
+            streamingActive = true
+            process.stdout.write('\n')
+          } else if (event.type === 'token') {
+            process.stdout.write(event.value)
+          }
+        }
+
+        const onToolCall = (toolName, args) => {
+          if (!process.stdout.isTTY) return
+          const label = formatToolLabel(toolName, args)
+          spinner.update(`${label}`)
+        }
+
+        const taskResult = await queryEngine.runTask(task, history, { onFinalToken, onToolCall })
         spinner.stop()
+
         const answer = taskResult.answer
         sessionStore.appendWithMeta('assistant', answer, { kind: 'code' })
 
-        // Silently refresh snapshot when Lupin inspected files — keeps future prompts richer
+        // Silently refresh snapshot when Lupin inspected files
         if (taskResult?.inspectedFiles?.length > 0) {
           currentSnapshot = initWorkspace(config.projectRoot, currentWorkspaceContext)
           queryEngine.setSnapshot(currentSnapshot)
         }
 
-        console.log(answer)
+        if (streamingActive) {
+          process.stdout.write('\n')
+        } else {
+          console.log(answer)
+        }
         await sessionStore.save()
         safePrompt()
       })

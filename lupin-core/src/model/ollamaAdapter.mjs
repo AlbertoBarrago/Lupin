@@ -31,29 +31,25 @@ export class OllamaAdapter {
     }
   }
 
-  async chat(messages, options = {}) {
+  async *chatStream(messages, options = {}) {
     let response
     try {
-      response = await withTimeout(
-        signal =>
-          fetch(`${this.baseUrl}/api/chat`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            signal,
-            body: JSON.stringify({
-              model: this.model,
-              stream: false,
-              messages,
-              options: options.options || undefined,
-            }),
-          }),
-        this.timeoutMs,
-      )
-    } catch (error) {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+      response = await fetch(`${this.baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: this.model,
+          stream: true,
+          messages,
+          options: options.options || undefined,
+        }),
+      }).finally(() => clearTimeout(timer))
+    } catch {
       throw new Error(
-        `cannot reach Ollama at ${this.baseUrl}; run "ollama serve" and ensure model "${this.model}" is installed`,
+        `cannot reach Ollama at ${this.baseUrl} — start Ollama (app or "ollama serve") and ensure model "${this.model}" is installed (ollama pull ${this.model})`,
       )
     }
 
@@ -62,11 +58,34 @@ export class OllamaAdapter {
       throw new Error(`ollama HTTP ${response.status}: ${body.slice(0, 300)}`)
     }
 
-    const payload = await response.json()
-    const text = payload?.message?.content?.trim()
-    if (!text) {
-      throw new Error('empty ollama response')
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let lineBuffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      lineBuffer += decoder.decode(value, { stream: true })
+      const lines = lineBuffer.split('\n')
+      lineBuffer = lines.pop() ?? ''
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        try {
+          const obj = JSON.parse(trimmed)
+          const token = obj?.message?.content
+          if (token) yield token
+        } catch {}
+      }
     }
+  }
+
+  async chat(messages, options = {}) {
+    let text = ''
+    for await (const token of this.chatStream(messages, options)) {
+      text += token
+    }
+    if (!text.trim()) throw new Error('empty ollama response')
     return text
   }
 }

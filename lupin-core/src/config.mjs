@@ -42,7 +42,7 @@ export function loadConfig() {
     ollama: {
       baseUrl: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
       model: process.env.OLLAMA_MODEL || 'qwen2.5-coder:7b',
-      timeoutMs: Number.parseInt(process.env.OLLAMA_TIMEOUT_MS || '20000', 10),
+      timeoutMs: Number.parseInt(process.env.OLLAMA_TIMEOUT_MS || '60000', 10),
     },
     agent: {
       maxSteps: Number.parseInt(process.env.AGENT_MAX_STEPS || '30', 10),

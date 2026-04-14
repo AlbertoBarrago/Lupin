@@ -4,6 +4,16 @@ import {
   isValidToolCallShape,
   normalizeShape,
 } from './jsonProtocol.mjs'
+import { preloadWorkspaceFiles } from './workspaceContext.mjs'
+
+function unescapeJson(str) {
+  return str
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t')
+    .replace(/\\r/g, '')
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\')
+}
 import { buildSystemPrompt } from '../prompt/systemPrompt.mjs'
 
 function normalizeTaskText(task) {
@@ -144,15 +154,68 @@ export class QueryEngine {
     this.initSnapshot = snapshot
   }
 
-  async runTask(task, historyMessages = []) {
+  // Stream model response, detect final answer, pipe content tokens to onFinalToken.
+  // Returns full raw text for JSON parsing.
+  async #collectWithStream(messages, options, onFinalToken) {
+    let fullText = ''
+    let phase = 'detect' // detect | tool_call | final_seek | final_stream
+    let held = ''
+    const HOLD = 20 // chars to hold back to strip closing "}
+    const DETECT_LIMIT = 80 // chars before we give up detecting
+
+    const emit = (str) => { if (onFinalToken && str) onFinalToken(str) }
+
+    const flush = () => {
+      const clean = held.replace(/\\n$/, '').replace(/["\}\s`]+$/, '')
+      emit(unescapeJson(clean))
+      held = ''
+    }
+
+    for await (const token of this.modelAdapter.chatStream(messages, options)) {
+      fullText += token
+
+      if (phase === 'detect') {
+        if (fullText.includes('"type":"final"') || fullText.includes('"type": "final"')) {
+          phase = 'final_seek'
+        } else if (fullText.length > DETECT_LIMIT || fullText.includes('tool_call') || fullText.includes('file_write') || fullText.includes('file_read') || fullText.includes('file_delete') || fullText.includes('bash')) {
+          phase = 'tool_call'
+        }
+      }
+
+      if (phase === 'final_seek') {
+        const m = fullText.match(/"content"\s*:\s*"/)
+        if (m) {
+          phase = 'final_stream'
+          // seed held with whatever content we already have after the opening quote
+          held = fullText.slice(m.index + m[0].length)
+        }
+      } else if (phase === 'final_stream') {
+        held += token
+        if (held.length > HOLD) {
+          const chunk = held.slice(0, held.length - HOLD)
+          held = held.slice(held.length - HOLD)
+          emit(unescapeJson(chunk))
+        }
+      }
+    }
+
+    if (phase === 'final_stream') flush()
+
+    if (!fullText.trim()) throw new Error('empty ollama response')
+    return fullText
+  }
+
+  async runTask(task, historyMessages = [], { onFinalToken, onToolCall } = {}) {
     const normalizedTask = normalizeTaskText(task)
     const workspaceContext = this.toolRuntime.getWorkspaceContext()
     const workspaceIsEmpty = workspaceContext.topLevel.length === 0
     const implementationTask = looksLikeImplementationTask(normalizedTask)
+    const preloadedFiles = preloadWorkspaceFiles(this.toolRuntime.projectRoot)
     const systemPrompt = buildSystemPrompt(
       this.toolRuntime.listTools(),
       workspaceContext,
       this.initSnapshot,
+      preloadedFiles,
     )
     const messages = [
       { role: 'system', content: systemPrompt },
@@ -166,7 +229,7 @@ export class QueryEngine {
       })
     }
 
-    if (implementationTask && !workspaceIsEmpty) {
+    if (implementationTask && !workspaceIsEmpty && !preloadedFiles) {
       messages.push({
         role: 'user',
         content: buildImplementationWorkflowInstruction(),
@@ -182,18 +245,34 @@ export class QueryEngine {
 
     messages.push({ role: 'user', content: normalizedTask })
 
-    let inspectionCount = 0
+    // If files are preloaded in system prompt, inspection guard is already satisfied
+    let inspectionCount = preloadedFiles ? 1 : 0
     let hasEditedFiles = false
     let hasVerifiedChanges = false
     const changedFiles = new Set()
     const inspectedFiles = new Set()
     const recentToolCalls = [] // loop detection
 
+    let streamingStarted = false
+
     for (let step = 1; step <= this.maxSteps; step++) {
       if (this.debug) process.stderr.write(`[lupin] step ${step}/${this.maxSteps}\n`)
-      const raw = await this.modelAdapter.chat(messages, {
-        options: { temperature: 0.2 },
-      })
+
+      const streamCallback = onFinalToken
+        ? (token) => {
+            if (!streamingStarted) {
+              streamingStarted = true
+              onFinalToken({ type: 'start' })
+            }
+            onFinalToken({ type: 'token', value: token })
+          }
+        : null
+
+      const raw = await this.#collectWithStream(
+        messages,
+        { options: { temperature: 0.1 } },
+        streamCallback,
+      )
       if (this.debug) process.stderr.write(`[lupin] raw: ${raw.slice(0, 300)}\n`)
 
       let parsed
@@ -244,6 +323,7 @@ export class QueryEngine {
 
       if (isValidToolCallShape(parsed)) {
         if (this.debug) process.stderr.write(`[lupin] tool: ${parsed.tool} args: ${JSON.stringify(parsed.args).slice(0, 120)}\n`)
+        onToolCall?.(parsed.tool, parsed.args || {})
 
         // Loop detection: same tool + same args 3 times in a row = stuck
         const callKey = `${parsed.tool}:${JSON.stringify(parsed.args)}`
