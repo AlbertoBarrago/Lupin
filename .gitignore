@@ -1,4 +1,2 @@
 .DS_Store
-.idea/
-
-restore-core/.data/
+lupin-core/.data

@@ -1,0 +1,13 @@
+{
+  "name": "lupin-agent",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "lupin": "lupin-core/src/index.mjs"
+  },
+  "scripts": {
+    "start": "node lupin-core/src/index.mjs",
+    "start:debug": "DEBUG=1 node lupin-core/src/index.mjs"
+  }
+}
