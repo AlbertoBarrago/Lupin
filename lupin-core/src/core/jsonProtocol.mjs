@@ -36,6 +36,16 @@ export function normalizeShape(value) {
     return { type: 'tool_call', tool: 'FileReadTool', args: { path: value.path } }
   }
 
+  // {"type":"file_edit","path":"...","oldText":"...","newText":"..."} → FileEditTool (text-match mode)
+  if (value.type === 'file_edit' && typeof value.path === 'string') {
+    return { type: 'tool_call', tool: 'FileEditTool', args: { path: value.path, oldText: value.oldText ?? '', newText: value.newText ?? '', replaceAll: value.replaceAll } }
+  }
+
+  // {"type":"file_patch","path":"...","lineStart":N,"lineEnd":M,"newText":"..."} → FileEditTool (line-range mode)
+  if (value.type === 'file_patch' && typeof value.path === 'string') {
+    return { type: 'tool_call', tool: 'FileEditTool', args: { path: value.path, lineStart: value.lineStart, lineEnd: value.lineEnd, newText: value.newText ?? '' } }
+  }
+
   // {"type":"file_delete","path":"..."} → FileDeleteTool
   if (value.type === 'file_delete' && typeof value.path === 'string') {
     return { type: 'tool_call', tool: 'FileDeleteTool', args: { path: value.path } }
@@ -44,6 +54,16 @@ export function normalizeShape(value) {
   // {"type":"bash","command":"..."} → BashTool
   if (value.type === 'bash' && typeof value.command === 'string') {
     return { type: 'tool_call', tool: 'BashTool', args: { command: value.command } }
+  }
+
+  // {"type":"web_search","query":"..."} → WebSearchTool
+  if (value.type === 'web_search' && typeof value.query === 'string') {
+    return { type: 'tool_call', tool: 'WebSearchTool', args: { query: value.query } }
+  }
+
+  // {"type":"web_fetch","url":"..."} → WebFetchTool
+  if (value.type === 'web_fetch' && typeof value.url === 'string') {
+    return { type: 'tool_call', tool: 'WebFetchTool', args: { url: value.url } }
   }
 
   return value

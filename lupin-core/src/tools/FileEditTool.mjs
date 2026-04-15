@@ -1,55 +1,88 @@
 import fs from 'node:fs'
 import { resolveInsideWorkspace, toWorkspaceRelative } from '../core/fsSafety.mjs'
 
+async function applyLineRangeEdit(abs, lineStart, lineEnd, newText) {
+  const raw = await fs.promises.readFile(abs, 'utf8')
+  const lines = raw.split('\n')
+  const total = lines.length
+  const start = Number(lineStart)
+  const end = Number(lineEnd)
+
+  if (!Number.isInteger(start) || start < 1 || start > total) {
+    throw new Error(`lineStart ${start} out of range (file has ${total} lines)`)
+  }
+  if (!Number.isInteger(end) || end < start || end > total) {
+    throw new Error(`lineEnd ${end} out of range (must be >= lineStart and <= ${total})`)
+  }
+
+  const replacement = String(newText ?? '').split('\n')
+  const next = [
+    ...lines.slice(0, start - 1),
+    ...replacement,
+    ...lines.slice(end),
+  ].join('\n')
+
+  if (next === raw) throw new Error('edit produced no changes')
+  await fs.promises.writeFile(abs, next, 'utf8')
+  return { replacedLines: end - start + 1, newLines: replacement.length }
+}
+
+async function applyTextEdit(abs, oldText, newText, replaceAll) {
+  const original = await fs.promises.readFile(abs, 'utf8')
+  const occurrences = original.split(oldText).length - 1
+
+  if (occurrences === 0) {
+    throw new Error('oldText not found in file')
+  }
+  if (!replaceAll && occurrences > 1) {
+    throw new Error('oldText is not unique; refine the match or set replaceAll=true')
+  }
+
+  const next = replaceAll
+    ? original.split(oldText).join(newText)
+    : original.replace(oldText, newText)
+
+  if (next === original) throw new Error('edit produced no changes')
+  await fs.promises.writeFile(abs, next, 'utf8')
+  return { replacedOccurrences: replaceAll ? occurrences : 1 }
+}
+
 export const FileEditTool = {
   name: 'FileEditTool',
   description:
-    'Edit part of an existing UTF-8 text file by replacing a unique string, optionally all matches.',
+    'Edit an existing UTF-8 file. Two modes: ' +
+    '(1) LINE-RANGE (preferred): provide lineStart + lineEnd + newText — replaces those lines. Use after FileReadTool to get exact line numbers. ' +
+    '(2) TEXT-MATCH: provide oldText + newText — replaces exact string match. oldText must match character-for-character including whitespace.',
   schema: {
     type: 'object',
     properties: {
       path: { type: 'string' },
+      lineStart: { type: 'number', description: '1-indexed first line to replace (inclusive)' },
+      lineEnd: { type: 'number', description: '1-indexed last line to replace (inclusive)' },
       oldText: { type: 'string' },
       newText: { type: 'string' },
       replaceAll: { type: 'boolean' },
     },
-    required: ['path', 'oldText', 'newText'],
+    required: ['path', 'newText'],
   },
   async run(args, ctx) {
     const abs = resolveInsideWorkspace(ctx.projectRoot, args?.path)
-    const oldText = String(args?.oldText ?? '')
     const newText = String(args?.newText ?? '')
-    const replaceAll = Boolean(args?.replaceAll)
 
-    if (!oldText) {
-      throw new Error('oldText must not be empty')
+    let editInfo
+    if (args?.lineStart != null && args?.lineEnd != null) {
+      editInfo = await applyLineRangeEdit(abs, args.lineStart, args.lineEnd, newText)
+    } else {
+      const oldText = String(args?.oldText ?? '')
+      if (!oldText) throw new Error('provide either lineStart+lineEnd or oldText')
+      editInfo = await applyTextEdit(abs, oldText, newText, Boolean(args?.replaceAll))
     }
 
-    const original = await fs.promises.readFile(abs, 'utf8')
-    const occurrences = original.split(oldText).length - 1
-
-    if (occurrences === 0) {
-      throw new Error('oldText not found in file')
-    }
-
-    if (!replaceAll && occurrences > 1) {
-      throw new Error('oldText is not unique; refine the match or set replaceAll=true')
-    }
-
-    const next = replaceAll
-      ? original.split(oldText).join(newText)
-      : original.replace(oldText, newText)
-
-    if (next === original) {
-      throw new Error('edit produced no changes')
-    }
-
-    await fs.promises.writeFile(abs, next, 'utf8')
-
+    const written = await fs.promises.readFile(abs, 'utf8')
     return {
       path: toWorkspaceRelative(ctx.projectRoot, abs),
-      replacedOccurrences: replaceAll ? occurrences : 1,
-      bytes: Buffer.byteLength(next),
+      ...editInfo,
+      bytes: Buffer.byteLength(written),
     }
   },
 }

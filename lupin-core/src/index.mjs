@@ -17,11 +17,23 @@ import { FileBatchReadTool } from './tools/FileBatchReadTool.mjs'
 import { FileDeleteTool } from './tools/FileDeleteTool.mjs'
 import { GlobTool } from './tools/GlobTool.mjs'
 import { GrepTool } from './tools/GrepTool.mjs'
+import { WebFetchTool } from './tools/WebFetchTool.mjs'
+import { WebSearchTool } from './tools/WebSearchTool.mjs'
 import {
   formatWorkspaceSnapshot,
   initWorkspace,
   renderLupinMd,
 } from './core/workspaceInit.mjs'
+
+const C = {
+  reset: '\x1b[0m',
+  dim: '\x1b[2m',
+  bold: '\x1b[1m',
+  green: '\x1b[32m',
+  red: '\x1b[31m',
+  cyan: '\x1b[36m',
+  yellow: '\x1b[33m',
+}
 
 function formatToolLabel(toolName, args) {
   const short = {
@@ -33,8 +45,73 @@ function formatToolLabel(toolName, args) {
     GlobTool: () => `scanning files`,
     GrepTool: () => `searching ${args?.pattern || ''}`,
     BashTool: () => `$ ${String(args?.command || '').slice(0, 40)}`,
+    WebSearchTool: () => `searching web: ${String(args?.query || '').slice(0, 40)}`,
+    WebFetchTool: () => `fetching ${String(args?.url || '').slice(0, 50)}`,
   }
   return short[toolName]?.() ?? toolName
+}
+
+function fmtTokens(n) {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+}
+
+function renderEditDiff(toolName, args, result) {
+  if (!process.stdout.isTTY) return
+  if (!result?.ok) return
+
+  const filePath = args?.path || result?.result?.path || ''
+
+  if (toolName === 'FileWriteTool') {
+    const content = String(args?.content || '')
+    const lines = content.split('\n').slice(0, 12)
+    const truncated = content.split('\n').length > 12
+    console.log(`\n${C.cyan}  + ${filePath}${C.reset}`)
+    for (const line of lines) {
+      console.log(`${C.green}  + ${line}${C.reset}`)
+    }
+    if (truncated) console.log(`${C.dim}  + ...${C.reset}`)
+    return
+  }
+
+  if (toolName === 'FileEditTool') {
+    // Line-range mode
+    if (args?.lineStart != null && args?.lineEnd != null) {
+      const newLines = String(args?.newText ?? '').split('\n')
+      console.log(
+        `\n${C.cyan}  ✏  ${filePath}${C.reset}${C.dim}  @@ lines ${args.lineStart}–${args.lineEnd} @@${C.reset}`,
+      )
+      for (const line of newLines.slice(0, 10)) {
+        console.log(`${C.green}  + ${line}${C.reset}`)
+      }
+      if (newLines.length > 10) console.log(`${C.dim}  + ...${C.reset}`)
+      return
+    }
+
+    // Text-match mode
+    if (args?.oldText != null) {
+      const oldLines = String(args.oldText).split('\n')
+      const newLines = String(args.newText ?? '').split('\n')
+      console.log(`\n${C.cyan}  ✏  ${filePath}${C.reset}`)
+      for (const line of oldLines.slice(0, 6)) {
+        console.log(`${C.red}  - ${line}${C.reset}`)
+      }
+      if (oldLines.length > 6) console.log(`${C.dim}  - ...${C.reset}`)
+      for (const line of newLines.slice(0, 6)) {
+        console.log(`${C.green}  + ${line}${C.reset}`)
+      }
+      if (newLines.length > 6) console.log(`${C.dim}  + ...${C.reset}`)
+    }
+  }
+}
+
+function renderStatsLine(elapsedMs, tokenStats) {
+  if (!process.stdout.isTTY) return
+  const secs = (elapsedMs / 1000).toFixed(1)
+  const prompt = fmtTokens(tokenStats?.promptTokens ?? 0)
+  const completion = fmtTokens(tokenStats?.completionTokens ?? 0)
+  console.log(
+    `\n${C.dim}⏱  ${secs}s  ·  ↑${prompt} prompt  ↓${completion} completion${C.reset}`,
+  )
 }
 
 function createSpinner(label = 'thinking') {
@@ -220,7 +297,7 @@ async function main() {
   const model = new OllamaAdapter(config.ollama)
   const toolRuntime = new ToolRuntime({
     projectRoot: config.projectRoot,
-    tools: [BashTool, FileBatchReadTool, FileDeleteTool, FileEditTool, FileReadTool, FileWriteTool, GlobTool, GrepTool],
+    tools: [BashTool, FileBatchReadTool, FileDeleteTool, FileEditTool, FileReadTool, FileWriteTool, GlobTool, GrepTool, WebFetchTool, WebSearchTool],
     securityConfig: config.security,
     debug: config.debug,
   })
@@ -494,7 +571,9 @@ async function main() {
         const history = sessionStore.getModelHistory(config.agent.maxHistory)
         spinner.start('working')
 
+        const taskStart = Date.now()
         let streamingActive = false
+
         const onFinalToken = (event) => {
           if (event.type === 'start') {
             spinner.stop()
@@ -511,7 +590,20 @@ async function main() {
           spinner.update(`${label}`)
         }
 
-        const taskResult = await queryEngine.runTask(task, history, { onFinalToken, onToolCall })
+        const onToolResult = (toolName, args, result) => {
+          if (toolName === 'FileEditTool' || toolName === 'FileWriteTool') {
+            spinner.stop()
+            renderEditDiff(toolName, args, result)
+            spinner.start(formatToolLabel(toolName, args))
+          }
+        }
+
+        const taskResult = await queryEngine.runTask(task, history, {
+          onFinalToken,
+          onToolCall,
+          onToolResult,
+        })
+        const elapsed = Date.now() - taskStart
         spinner.stop()
 
         const answer = taskResult.answer
@@ -528,6 +620,8 @@ async function main() {
         } else {
           console.log(answer)
         }
+
+        renderStatsLine(elapsed, taskResult.tokenStats)
         await sessionStore.save()
         safePrompt()
       })

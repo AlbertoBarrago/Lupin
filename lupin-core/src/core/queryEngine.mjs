@@ -41,6 +41,51 @@ function looksLikeProjectQuestion(task) {
   )
 }
 
+function looksLikeWebQuery(task) {
+  const value = normalizeTaskText(task).toLowerCase()
+  if (!value) return false
+  return (
+    value.includes('weather') ||
+    value.includes('meteo') ||
+    value.includes('clima') ||
+    value.includes('temperature') ||
+    value.includes('temperatura') ||
+    value.includes('news') ||
+    value.includes('notizie') ||
+    value.includes('latest') ||
+    value.includes('current') ||
+    value.includes('today') ||
+    value.includes('oggi') ||
+    value.includes('adesso') ||
+    value.includes('now ') ||
+    value.includes('recent') ||
+    value.includes('recenti') ||
+    value.includes('cerca sul web') ||
+    value.includes('search the web') ||
+    value.includes('ricerca web') ||
+    value.includes('fai una ricerca') ||
+    value.includes('cerca online') ||
+    value.includes('trova online') ||
+    value.includes('what is the') ||
+    value.includes("what's the") ||
+    value.includes('who is') ||
+    value.includes('chi è') ||
+    value.includes('price of') ||
+    value.includes('prezzo di')
+  )
+}
+
+function buildWebQueryInstruction() {
+  return [
+    'WEB_QUERY:',
+    'This question requires current or real-time information that is not in your training data.',
+    'You MUST use WebSearchTool immediately — do NOT answer from memory.',
+    'Call WebSearchTool with a focused query, read the results, then give a final answer based on what you found.',
+    'If the results are insufficient, use WebFetchTool to read one of the result URLs for more detail.',
+    'Never say you cannot access the web — you have WebSearchTool available.',
+  ].join(' ')
+}
+
 function looksLikeImplementationTask(task) {
   const value = normalizeTaskText(task).toLowerCase()
   if (!value) return false
@@ -85,6 +130,25 @@ function buildProjectProbeInstruction(workspaceContext) {
     `Start with GlobTool to inspect structure, then read the most relevant files such as: ${targets.length ? targets.join(', ') : 'README.md and likely entry files'}.`,
     'Do not answer with "Unknown" or claim missing project information until you have inspected at least one structural source and one content source.',
   ].join(' ')
+}
+
+function isWebRefusal(answer) {
+  const v = String(answer || '').toLowerCase()
+  return (
+    v.includes('non sono in grado') ||
+    v.includes('non posso') ||
+    v.includes("i'm unable") ||
+    v.includes('i cannot') ||
+    v.includes("i can't") ||
+    v.includes('cannot access') ||
+    v.includes('no access') ||
+    v.includes('real-time') ||
+    v.includes('in tempo reale') ||
+    v.includes('ti consiglio di controllare') ||
+    v.includes('check a weather') ||
+    v.includes('consult a') ||
+    v.includes('visit a')
+  )
 }
 
 function isWeakFinalAnswer(answer) {
@@ -205,11 +269,12 @@ export class QueryEngine {
     return fullText
   }
 
-  async runTask(task, historyMessages = [], { onFinalToken, onToolCall } = {}) {
+  async runTask(task, historyMessages = [], { onFinalToken, onToolCall, onToolResult } = {}) {
     const normalizedTask = normalizeTaskText(task)
     const workspaceContext = this.toolRuntime.getWorkspaceContext()
     const workspaceIsEmpty = workspaceContext.topLevel.length === 0
     const implementationTask = looksLikeImplementationTask(normalizedTask)
+    const webQuery = looksLikeWebQuery(normalizedTask)
     const preloadedFiles = preloadWorkspaceFiles(this.toolRuntime.projectRoot)
     const systemPrompt = buildSystemPrompt(
       this.toolRuntime.listTools(),
@@ -243,7 +308,17 @@ export class QueryEngine {
       })
     }
 
+    if (webQuery) {
+      messages.push({
+        role: 'user',
+        content: buildWebQueryInstruction(),
+      })
+    }
+
     messages.push({ role: 'user', content: normalizedTask })
+
+    // Token accumulator for this task
+    const tokenStats = { promptTokens: 0, completionTokens: 0 }
 
     // If files are preloaded in system prompt, inspection guard is already satisfied
     let inspectionCount = preloadedFiles ? 1 : 0
@@ -273,6 +348,12 @@ export class QueryEngine {
         { options: { temperature: 0.1 } },
         streamCallback,
       )
+      // Accumulate token stats from this model call
+      const stepStats = this.modelAdapter.getLastStreamStats?.()
+      if (stepStats) {
+        tokenStats.promptTokens += stepStats.promptTokens
+        tokenStats.completionTokens += stepStats.completionTokens
+      }
       if (this.debug) process.stderr.write(`[lupin] raw: ${raw.slice(0, 300)}\n`)
 
       let parsed
@@ -310,6 +391,17 @@ export class QueryEngine {
           continue
         }
 
+        // Web query guard: model must use WebSearchTool before giving up
+        if (webQuery && inspectionCount === 0 && isWebRefusal(parsed.content)) {
+          messages.push({ role: 'assistant', content: JSON.stringify(parsed) })
+          messages.push({
+            role: 'user',
+            content:
+              'WEB_QUERY_ERROR: you refused to answer without trying the tools. You have WebSearchTool available. Use it NOW with a relevant query — do not apologize or say you cannot access the web.',
+          })
+          continue
+        }
+
         const answer = isWeakFinalAnswer(parsed.content)
           ? buildWorkspaceFallback(workspaceContext)
           : parsed.content
@@ -318,6 +410,7 @@ export class QueryEngine {
           transcript: messages,
           steps: step,
           inspectedFiles: [...inspectedFiles],
+          tokenStats,
         }
       }
 
@@ -340,11 +433,13 @@ export class QueryEngine {
         }
 
         const result = await this.toolRuntime.execute(parsed.tool, parsed.args || {})
+        onToolResult?.(parsed.tool, parsed.args || {}, result)
         if (isInspectionTool(parsed.tool)) {
           inspectionCount += 1
         }
         if ((parsed.tool === 'FileWriteTool' || parsed.tool === 'FileEditTool') && result?.ok) {
           hasEditedFiles = true
+          hasVerifiedChanges = true // tool already verified: read → patch → write internally
           if (result.result?.path) {
             changedFiles.add(String(result.result.path))
           }
@@ -360,9 +455,19 @@ export class QueryEngine {
           hasVerifiedChanges = true
         }
         messages.push({ role: 'assistant', content: JSON.stringify(parsed) })
-        const toolResultContent = result?.ok
-          ? `TOOL_RESULT ${parsed.tool}: ${JSON.stringify(result)}`
-          : `TOOL_ERROR ${parsed.tool}: ${result?.error || 'unknown error'}. Fix the arguments and retry — do not give up.`
+        let toolResultContent
+        if (result?.ok) {
+          toolResultContent = `TOOL_RESULT ${parsed.tool}: ${JSON.stringify(result)}`
+        } else {
+          const errMsg = result?.error || 'unknown error'
+          const hint =
+            parsed.tool === 'FileEditTool' && errMsg.includes('oldText not found')
+              ? ' Use FileReadTool to re-read the file and copy the exact text you want to replace.'
+              : parsed.tool === 'FileEditTool' && errMsg.includes('not unique')
+              ? ' Use a longer, more unique excerpt for oldText, or set replaceAll=true.'
+              : ' Fix the arguments and retry — do not give up.'
+          toolResultContent = `TOOL_ERROR ${parsed.tool}: ${errMsg}.${hint}`
+        }
         messages.push({ role: 'user', content: toolResultContent })
         continue
       }
@@ -397,6 +502,7 @@ export class QueryEngine {
           transcript: messages,
           steps: this.maxSteps,
           inspectedFiles: [...inspectedFiles],
+          tokenStats,
         }
       }
     } catch {}
@@ -407,6 +513,7 @@ export class QueryEngine {
       transcript: messages,
       steps: this.maxSteps,
       inspectedFiles: [...inspectedFiles],
+      tokenStats,
     }
   }
 }

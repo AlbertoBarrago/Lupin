@@ -9,10 +9,15 @@ export class OllamaAdapter {
     this.baseUrl = baseUrl
     this.model = model
     this.timeoutMs = timeoutMs
+    this._lastStreamStats = null
   }
 
   setModel(model) {
     this.model = model
+  }
+
+  getLastStreamStats() {
+    return this._lastStreamStats
   }
 
   async healthcheck() {
@@ -73,6 +78,12 @@ export class OllamaAdapter {
         if (!trimmed) continue
         try {
           const obj = JSON.parse(trimmed)
+          if (obj?.done === true) {
+            this._lastStreamStats = {
+              promptTokens: obj.prompt_eval_count ?? 0,
+              completionTokens: obj.eval_count ?? 0,
+            }
+          }
           const token = obj?.message?.content
           if (token) yield token
         } catch {}
