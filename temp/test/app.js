@@ -4,9 +4,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const emailInput = document.getElementById('email');
     const messageInput = document.getElementById('message');
 
-    // Load data from localStorage on page load
-    if (localStorage.getItem('formData')) {
-        const formData = JSON.parse(localStorage.getItem('formData'));
+    // Load data from sessionStorage on page load
+    if (sessionStorage.getItem('formData')) {
+        const formData = JSON.parse(sessionStorage.getItem('formData'));
         nameInput.value = formData.name || '';
         emailInput.value = formData.email || '';
         messageInput.value = formData.message || '';
@@ -19,7 +19,16 @@ document.addEventListener('DOMContentLoaded', function() {
             email: emailInput.value,
             message: messageInput.value
         };
-        localStorage.setItem('formData', JSON.stringify(formData));
-        alert('Form submitted and data saved to localStorage!');
+        sessionStorage.setItem('formData', JSON.stringify(formData));
+        alert('Form submitted and data saved to sessionStorage!');
+    });
+
+    // Add a delete button event listener
+    document.getElementById('clearButton').addEventListener('click', function() {
+        sessionStorage.removeItem('formData');
+        nameInput.value = '';
+        emailInput.value = '';
+        messageInput.value = '';
+        alert('Data removed from sessionStorage and form cleared!');
     });
 });
