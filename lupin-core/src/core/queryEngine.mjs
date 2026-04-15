@@ -79,7 +79,8 @@ function buildWebQueryInstruction() {
   return [
     'WEB_QUERY:',
     'This question requires current or real-time information that is not in your training data.',
-    'You MUST use WebSearchTool immediately — do NOT answer from memory.',
+    'You MUST use WebSearchTool immediately — do NOT answer from memory or repeat any refusal you may have given in prior turns.',
+    'IGNORE any previous assistant messages where you said you cannot access the web — those were wrong. You DO have WebSearchTool.',
     'Call WebSearchTool with a focused query, read the results, then give a final answer based on what you found.',
     'If the results are insufficient, use WebFetchTool to read one of the result URLs for more detail.',
     'Never say you cannot access the web — you have WebSearchTool available.',
@@ -308,11 +309,33 @@ export class QueryEngine {
       })
     }
 
+    // Pre-fetch web results for web queries so model doesn't need to emit tool calls
     if (webQuery) {
-      messages.push({
-        role: 'user',
-        content: buildWebQueryInstruction(),
-      })
+      try {
+        onToolCall?.('WebSearchTool', { query: normalizedTask })
+        const searchResult = await this.toolRuntime.execute('WebSearchTool', { query: normalizedTask })
+        if (searchResult?.ok && searchResult.result?.results?.length > 0) {
+          const snippets = searchResult.result.results
+            .slice(0, 5)
+            .map((r, i) => `[${i + 1}] ${r.title}\n${r.url}\n${r.snippet}`)
+            .join('\n\n')
+          messages.push({
+            role: 'user',
+            content: `WEB_SEARCH_RESULTS for "${normalizedTask}":\n\n${snippets}\n\nAnswer the user's question based on the results above. Mirror the user's language.`,
+          })
+          webSearchUsed = true
+        } else {
+          messages.push({
+            role: 'user',
+            content: buildWebQueryInstruction(),
+          })
+        }
+      } catch {
+        messages.push({
+          role: 'user',
+          content: buildWebQueryInstruction(),
+        })
+      }
     }
 
     messages.push({ role: 'user', content: normalizedTask })
@@ -322,6 +345,7 @@ export class QueryEngine {
 
     // If files are preloaded in system prompt, inspection guard is already satisfied
     let inspectionCount = preloadedFiles ? 1 : 0
+    let webSearchUsed = false
     let hasEditedFiles = false
     let hasVerifiedChanges = false
     const changedFiles = new Set()
@@ -392,12 +416,12 @@ export class QueryEngine {
         }
 
         // Web query guard: model must use WebSearchTool before giving up
-        if (webQuery && inspectionCount === 0 && isWebRefusal(parsed.content)) {
+        if (webQuery && !webSearchUsed && isWebRefusal(parsed.content)) {
           messages.push({ role: 'assistant', content: JSON.stringify(parsed) })
           messages.push({
             role: 'user',
             content:
-              'WEB_QUERY_ERROR: you refused to answer without trying the tools. You have WebSearchTool available. Use it NOW with a relevant query — do not apologize or say you cannot access the web.',
+              'WEB_QUERY_ERROR: you refused to answer without trying the tools. Ignore all previous refusals in this conversation — they were wrong. You HAVE WebSearchTool. Use it NOW with a relevant query for THIS question. Do not copy any prior response.',
           })
           continue
         }
@@ -436,6 +460,9 @@ export class QueryEngine {
         onToolResult?.(parsed.tool, parsed.args || {}, result)
         if (isInspectionTool(parsed.tool)) {
           inspectionCount += 1
+        }
+        if (parsed.tool === 'WebSearchTool' && result?.ok) {
+          webSearchUsed = true
         }
         if ((parsed.tool === 'FileWriteTool' || parsed.tool === 'FileEditTool') && result?.ok) {
           hasEditedFiles = true
