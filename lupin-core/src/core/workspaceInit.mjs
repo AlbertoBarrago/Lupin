@@ -1,12 +1,30 @@
+/**
+ * @module workspaceInit
+ * @description Implements the `/init` command: analyses a workspace to build a structured
+ * snapshot and render it as a `LUPIN.md` instruction file.
+ */
+
 import fs from 'node:fs'
 import path from 'node:path'
 
+/** Directory names that are skipped during all recursive workspace walks. */
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.idea', '.vscode', 'dist', 'build', '.next', '.nuxt', '__pycache__', '.cache', 'coverage', '.turbo'])
 
+/**
+ * Returns `true` if `name` exists directly under `projectRoot`.
+ * @param {string} projectRoot - Absolute path to the project root.
+ * @param {string} name - Relative file or directory name to test.
+ * @returns {boolean}
+ */
 function exists(projectRoot, name) {
   return fs.existsSync(path.join(projectRoot, name))
 }
 
+/**
+ * Reads and JSON-parses a file, returning `null` on any error.
+ * @param {string} filePath - Absolute path to the JSON file.
+ * @returns {object|null} Parsed JSON object, or `null` if the file cannot be read or parsed.
+ */
 function safeReadJson(filePath) {
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'))
@@ -15,6 +33,12 @@ function safeReadJson(filePath) {
   }
 }
 
+/**
+ * Reads a text file from disk, returning up to `maxChars` characters.
+ * @param {string} filePath - Absolute or relative path to the file.
+ * @param {number} [maxChars=12000] - Maximum number of characters to return.
+ * @returns {string|null} File contents (possibly truncated), or `null` if unreadable.
+ */
 function readTextFile(filePath, maxChars = 12000) {
   try {
     return fs.readFileSync(filePath, 'utf8').slice(0, maxChars)
@@ -23,6 +47,11 @@ function readTextFile(filePath, maxChars = 12000) {
   }
 }
 
+/**
+ * Returns all directory entries for `dirPath`, or an empty array on error.
+ * @param {string} dirPath - Absolute path to the directory to read.
+ * @returns {import('node:fs').Dirent[]}
+ */
 function listDirEntries(dirPath) {
   try {
     return fs.readdirSync(dirPath, { withFileTypes: true })
@@ -31,12 +60,22 @@ function listDirEntries(dirPath) {
   }
 }
 
+/**
+ * Returns the names of all regular files at the top level of `projectRoot`.
+ * @param {string} projectRoot - Absolute path to the project root.
+ * @returns {string[]}
+ */
 function listTopLevelFiles(projectRoot) {
   return listDirEntries(projectRoot)
     .filter(e => e.isFile())
     .map(e => e.name)
 }
 
+/**
+ * Detects the Node.js package manager in use by checking for lockfiles.
+ * @param {string} projectRoot - Absolute path to the project root.
+ * @returns {'pnpm'|'bun'|'yarn'|'npm'|null} Package manager name, or `null` if not detected.
+ */
 function detectPackageManager(projectRoot) {
   if (exists(projectRoot, 'pnpm-lock.yaml')) return 'pnpm'
   if (exists(projectRoot, 'bun.lockb') || exists(projectRoot, 'bun.lock')) return 'bun'
@@ -45,6 +84,12 @@ function detectPackageManager(projectRoot) {
   return null
 }
 
+/**
+ * Detects the primary language/runtime stacks present in the project.
+ * @param {string} projectRoot - Absolute path to the project root.
+ * @param {object|null} packageJson - Parsed `package.json`, or `null` if not available.
+ * @returns {string[]} Deduplicated list of detected stack names (e.g. `['node', 'typescript', 'react']`).
+ */
 function detectStacks(projectRoot, packageJson) {
   const names = new Set([
     ...Object.keys(packageJson?.dependencies || {}),
@@ -66,6 +111,13 @@ function detectStacks(projectRoot, packageJson) {
   return [...new Set(stacks)]
 }
 
+/**
+ * Performs a BFS walk of the project to check whether any source file
+ * has one of the specified extensions.
+ * @param {string} projectRoot - Root directory to search from.
+ * @param {string[]} extensions - File extensions to look for (e.g. `['.ts', '.tsx']`).
+ * @returns {boolean} `true` if at least one matching file is found.
+ */
 function hasSourceFiles(projectRoot, extensions) {
   const queue = [projectRoot]
   while (queue.length > 0) {
@@ -82,6 +134,13 @@ function hasSourceFiles(projectRoot, extensions) {
   return false
 }
 
+/**
+ * Detects frameworks, infrastructure tooling, and meta-frameworks in use.
+ * Prioritises config-file signals over `package.json` dependency names.
+ * @param {string} projectRoot - Absolute path to the project root.
+ * @param {object|null} packageJson - Parsed `package.json`, or `null` if not available.
+ * @returns {string[]} Deduplicated list of detected framework names.
+ */
 function detectFrameworks(projectRoot, packageJson) {
   const names = new Set([
     ...Object.keys(packageJson?.dependencies || {}),
@@ -134,6 +193,13 @@ function detectFrameworks(projectRoot, packageJson) {
   return [...new Set(frameworks)]
 }
 
+/**
+ * Detects the test framework used in the project.
+ * Checks for config files first, then falls back to dependency names.
+ * @param {string} projectRoot - Absolute path to the project root.
+ * @param {object|null} packageJson - Parsed `package.json`, or `null` if not available.
+ * @returns {string|null} Test framework name, or `null` if not detected.
+ */
 function detectTestFramework(projectRoot, packageJson) {
   const names = new Set([
     ...Object.keys(packageJson?.dependencies || {}),
@@ -163,6 +229,11 @@ function detectTestFramework(projectRoot, packageJson) {
   return null
 }
 
+/**
+ * Detects CI/CD and monorepo tooling based on config file presence.
+ * @param {string} projectRoot - Absolute path to the project root.
+ * @returns {string[]} List of detected CI/CD system names.
+ */
 function detectCiCd(projectRoot) {
   const systems = []
   if (exists(projectRoot, '.github/workflows')) systems.push('GitHub Actions')
@@ -176,6 +247,13 @@ function detectCiCd(projectRoot) {
   return systems
 }
 
+/**
+ * Detects likely application entry-point files by inspecting `package.json` fields,
+ * common naming conventions, and root-level source files.
+ * @param {string} projectRoot - Absolute path to the project root.
+ * @param {object|null} packageJson - Parsed `package.json`, or `null` if not available.
+ * @returns {string[]} Up to 10 relative paths of candidate entry files that exist on disk.
+ */
 function detectEntrypoints(projectRoot, packageJson) {
   const results = new Set()
 
@@ -219,6 +297,12 @@ function detectEntrypoints(projectRoot, packageJson) {
     .slice(0, 10)
 }
 
+/**
+ * Identifies top-level source directories with the most files, as a proxy for
+ * architectural complexity hotspots.
+ * @param {string} projectRoot - Absolute path to the project root.
+ * @returns {string[]} Up to 6 formatted strings like `"src/ (42 files)"`, sorted by file count descending.
+ */
 function detectArchitecturalHotspots(projectRoot) {
   // Count source files per top-level directory, return the top ones
   const topDirs = listDirEntries(projectRoot)
@@ -237,6 +321,12 @@ function detectArchitecturalHotspots(projectRoot) {
     .map(({ dir, count }) => `${dir}/ (${count} files)`)
 }
 
+/**
+ * Recursively counts recognised source files under `dirPath`, up to a depth limit.
+ * @param {string} dirPath - Absolute path of the directory to count within.
+ * @param {number} depth - Current recursion depth (stops at 4).
+ * @returns {number} Total count of source files found.
+ */
 function countSourceFiles(dirPath, depth) {
   if (depth > 4) return 0
   let count = 0
@@ -251,12 +341,22 @@ function countSourceFiles(dirPath, depth) {
   return count
 }
 
+/**
+ * Returns the names of all non-hidden, non-skipped top-level directories in the project.
+ * @param {string} projectRoot - Absolute path to the project root.
+ * @returns {string[]}
+ */
 function detectKeyDirectories(projectRoot) {
   return listDirEntries(projectRoot)
     .filter(e => e.isDirectory() && !SKIP_DIRS.has(e.name) && !e.name.startsWith('.'))
     .map(e => e.name)
 }
 
+/**
+ * Extracts the most relevant `package.json` scripts as human-readable strings.
+ * @param {object|null} packageJson - Parsed `package.json`, or `null` if not available.
+ * @returns {string[]} Lines of the form `"<name>: <command>"` for well-known script names.
+ */
 function summarizeScripts(packageJson) {
   const scripts = packageJson?.scripts || {}
   const interesting = ['dev', 'start', 'build', 'test', 'lint', 'typecheck', 'check', 'format']
@@ -265,6 +365,14 @@ function summarizeScripts(packageJson) {
     .map(name => `${name}: ${scripts[name]}`)
 }
 
+/**
+ * Resolves the human-readable repository name using `package.json`, the git root
+ * directory name, or the project root directory name — in that order of preference.
+ * @param {string} projectRoot - Absolute path to the project root.
+ * @param {object|null} packageJson - Parsed `package.json`, or `null` if not available.
+ * @param {{ gitRoot: string|null }} workspaceContext - Workspace context object with `gitRoot`.
+ * @returns {string} Repository name.
+ */
 function detectRepoName(projectRoot, packageJson, workspaceContext) {
   if (typeof packageJson?.name === 'string' && packageJson.name.trim()) {
     return packageJson.name.trim()
@@ -273,6 +381,11 @@ function detectRepoName(projectRoot, packageJson, workspaceContext) {
   return path.basename(projectRoot)
 }
 
+/**
+ * Reads `README.md` and returns a short plain-text summary with Markdown syntax stripped.
+ * @param {string} projectRoot - Absolute path to the project root.
+ * @returns {string|null} Summary string (up to 320 characters), or `null` if not available.
+ */
 function summarizeReadme(projectRoot) {
   const content = readTextFile(path.join(projectRoot, 'README.md'), 5000)
   if (!content) return null
@@ -287,6 +400,13 @@ function summarizeReadme(projectRoot) {
   return lines.slice(0, 3).join(' ').slice(0, 320)
 }
 
+/**
+ * Selects the best single shell command to verify the workspace builds/passes checks,
+ * derived from the available `package.json` scripts.
+ * @param {'pnpm'|'bun'|'yarn'|'npm'|null} packageManager - Detected package manager.
+ * @param {string[]} scripts - Summarised script lines in `"name: command"` format.
+ * @returns {string|null} A shell command string, or `null` if no suitable script is found.
+ */
 function detectValidationCommand(packageManager, scripts) {
   const scriptMap = new Map(
     scripts.map(line => {
@@ -308,6 +428,12 @@ function detectValidationCommand(packageManager, scripts) {
   return null
 }
 
+/**
+ * Extracts the `## Owner Preferences` section from an existing `LUPIN.md` file,
+ * or returns a default boilerplate block if the section is absent.
+ * @param {string} [existingContent=''] - Current contents of an existing `LUPIN.md`, if any.
+ * @returns {string} The `## Owner Preferences` section as a Markdown string.
+ */
 function extractManualSection(existingContent) {
   const content = String(existingContent || '')
   const marker = '## Owner Preferences'
@@ -326,6 +452,32 @@ function extractManualSection(existingContent) {
   return content.slice(index).trim()
 }
 
+/**
+ * Analyses `projectRoot` and assembles a structured snapshot object describing
+ * the workspace. Used by `renderLupinMd` and `formatWorkspaceSnapshot`.
+ * @param {string} projectRoot - Absolute or relative path to the project root.
+ * @param {{ gitRoot: string|null, markers: string[], topLevel: string[] }} workspaceContext
+ *   Pre-built workspace context (from `buildWorkspaceContext`).
+ * @returns {{
+ *   createdAt: string,
+ *   workspaceRoot: string,
+ *   gitRoot: string|null,
+ *   repoName: string,
+ *   packageManager: string|null,
+ *   stacks: string[],
+ *   frameworks: string[],
+ *   testFramework: string|null,
+ *   cicd: string[],
+ *   entrypoints: string[],
+ *   hotspots: string[],
+ *   keyDirectories: string[],
+ *   scripts: string[],
+ *   validationCommand: string|null,
+ *   readmeSummary: string|null,
+ *   markers: string[],
+ *   topLevelEntries: string[]
+ * }} Workspace snapshot.
+ */
 export function initWorkspace(projectRoot, workspaceContext) {
   const resolvedRoot = path.resolve(projectRoot)
   const packageJson = safeReadJson(path.join(resolvedRoot, 'package.json'))
@@ -354,6 +506,13 @@ export function initWorkspace(projectRoot, workspaceContext) {
   return snapshot
 }
 
+/**
+ * Renders a workspace snapshot as a `LUPIN.md` Markdown string.
+ * Preserves the `## Owner Preferences` section from any existing file content.
+ * @param {ReturnType<typeof initWorkspace>} snapshot - Workspace snapshot produced by `initWorkspace`.
+ * @param {string} [existingContent=''] - Current contents of an existing `LUPIN.md`, if any.
+ * @returns {string} Full Markdown content for `LUPIN.md`.
+ */
 export function renderLupinMd(snapshot, existingContent = '') {
   const manualSection = extractManualSection(existingContent)
   const lines = [
@@ -423,6 +582,12 @@ export function renderLupinMd(snapshot, existingContent = '') {
   return lines.join('\n')
 }
 
+/**
+ * Formats a workspace snapshot as a compact multi-line plain-text string
+ * suitable for display in the CLI or session summaries.
+ * @param {ReturnType<typeof initWorkspace>|null} snapshot - Workspace snapshot, or `null` if not initialised.
+ * @returns {string} Human-readable summary of the snapshot.
+ */
 export function formatWorkspaceSnapshot(snapshot) {
   if (!snapshot) return 'Workspace snapshot: not initialized'
 

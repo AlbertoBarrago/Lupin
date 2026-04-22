@@ -1,3 +1,5 @@
+/** @module FileBatchReadTool */
+
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFile as execFileCb } from 'node:child_process'
@@ -6,9 +8,25 @@ import { resolveInsideWorkspace, toWorkspaceRelative } from '../core/fsSafety.mj
 
 const execFileAsync = promisify(execFileCb)
 
+/** Maximum number of characters read from a single file before truncation. */
 const MAX_CHARS_PER_FILE = 8000
+/** Maximum number of files that can be read in a single batch operation. */
 const MAX_FILES = 20
 
+/**
+ * Tool that reads multiple files at once using a regex pattern.
+ *
+ * Runs `rg --files` in the project root to enumerate all tracked files, filters them
+ * by the caller-supplied regex, and returns their contents in one response. Prefer this
+ * over multiple sequential `FileReadTool` calls.
+ *
+ * @type {{
+ *   name: string,
+ *   description: string,
+ *   schema: object,
+ *   run: (args: object, ctx: {projectRoot: string}) => Promise<{files: Array<object>, note?: string}>
+ * }}
+ */
 export const FileBatchReadTool = {
   name: 'FileBatchReadTool',
   description:
@@ -27,6 +45,18 @@ export const FileBatchReadTool = {
     },
     required: ['pattern'],
   },
+  /**
+   * Execute the batch-read operation.
+   *
+   * @param {object} args - Tool arguments supplied by the model.
+   * @param {string} args.pattern - Regex string used to filter file paths.
+   * @param {number} [args.max_files] - Upper bound on files to read (capped at {@link MAX_FILES}).
+   * @param {{projectRoot: string}} ctx - Runtime context supplied by the tool runner.
+   * @returns {Promise<{files: Array<{path: string, content?: string, truncated?: boolean, error?: string}>, note?: string}>}
+   *   Resolves with an object whose `files` array contains one entry per matched file.
+   *   Each entry has `path` plus either `content` (and optional `truncated` flag) or `error`.
+   * @throws {Error} If `pattern` is missing or is not a valid regular expression.
+   */
   async run(args, ctx) {
     const pattern = String(args?.pattern || '').trim()
     if (!pattern) throw new Error('pattern is required')

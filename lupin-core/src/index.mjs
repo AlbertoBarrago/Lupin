@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+/**
+ * @module index
+ * CLI entry point for Lupin. Handles argument parsing, interactive REPL loop,
+ * slash command dispatch, streaming task execution, and session persistence.
+ */
 
 import fs from 'node:fs'
 import readline from 'node:readline'
@@ -19,11 +24,7 @@ import { GlobTool } from './tools/GlobTool.mjs'
 import { GrepTool } from './tools/GrepTool.mjs'
 import { WebFetchTool } from './tools/WebFetchTool.mjs'
 import { WebSearchTool } from './tools/WebSearchTool.mjs'
-import {
-  formatWorkspaceSnapshot,
-  initWorkspace,
-  renderLupinMd,
-} from './core/workspaceInit.mjs'
+import { formatWorkspaceSnapshot, initWorkspace, renderLupinMd } from './core/workspaceInit.mjs'
 
 const C = {
   reset: '\x1b[0m',
@@ -35,6 +36,19 @@ const C = {
   yellow: '\x1b[33m',
 }
 
+/**
+ * Maps a tool name and its arguments to a short, human-readable label
+ * suitable for display in the spinner or progress output.
+ *
+ * @param {string} toolName - The name of the tool being invoked.
+ * @param {object} args - The arguments passed to the tool.
+ * @param {string} [args.path] - File path (used by file tools).
+ * @param {string} [args.pattern] - Glob or grep pattern.
+ * @param {string} [args.command] - Shell command string (used by BashTool).
+ * @param {string} [args.query] - Search query string (used by WebSearchTool).
+ * @param {string} [args.url] - URL to fetch (used by WebFetchTool).
+ * @returns {string} A short label string, or the raw `toolName` if no mapping exists.
+ */
 function formatToolLabel(toolName, args) {
   const short = {
     FileWriteTool: () => `writing ${args?.path || ''}`,
@@ -51,10 +65,36 @@ function formatToolLabel(toolName, args) {
   return short[toolName]?.() ?? toolName
 }
 
+/**
+ * Formats a raw token count into a compact human-readable string.
+ * Values >= 1000 are rendered as `"1.2k"`; smaller values are stringified as-is.
+ *
+ * @param {number} n - The token count to format.
+ * @returns {string} Formatted token count string.
+ */
 function fmtTokens(n) {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
 }
 
+/**
+ * Prints a color-coded diff of a file write or edit operation to stdout.
+ * For `FileWriteTool`, shows up to 12 lines of the new content with `+` prefixes.
+ * For `FileEditTool`, shows old lines in red (`-`) and new lines in green (`+`),
+ * handling both line-range mode and text-match mode.
+ * No-ops when `process.stdout.isTTY` is falsy or when the tool result indicates failure.
+ *
+ * @param {string} toolName - Either `'FileWriteTool'` or `'FileEditTool'`.
+ * @param {object} args - Arguments passed to the tool.
+ * @param {string} [args.path] - Target file path.
+ * @param {string} [args.content] - New file content (FileWriteTool).
+ * @param {string} [args.oldText] - Text being replaced (FileEditTool text-match mode).
+ * @param {string} [args.newText] - Replacement text (FileEditTool).
+ * @param {number} [args.lineStart] - Start line of range edit (FileEditTool line-range mode).
+ * @param {number} [args.lineEnd] - End line of range edit (FileEditTool line-range mode).
+ * @param {object} result - The tool execution result payload.
+ * @param {boolean} result.ok - Whether the tool succeeded.
+ * @returns {void}
+ */
 function renderEditDiff(toolName, args, result) {
   if (!process.stdout.isTTY) return
   if (!result?.ok) return
@@ -77,9 +117,7 @@ function renderEditDiff(toolName, args, result) {
     // Line-range mode
     if (args?.lineStart != null && args?.lineEnd != null) {
       const newLines = String(args?.newText ?? '').split('\n')
-      console.log(
-        `\n${C.cyan}  ✏  ${filePath}${C.reset}${C.dim}  @@ lines ${args.lineStart}–${args.lineEnd} @@${C.reset}`,
-      )
+      console.log(`\n${C.cyan}  ✏  ${filePath}${C.reset}${C.dim}  @@ lines ${args.lineStart}–${args.lineEnd} @@${C.reset}`)
       for (const line of newLines.slice(0, 10)) {
         console.log(`${C.green}  + ${line}${C.reset}`)
       }
@@ -104,16 +142,41 @@ function renderEditDiff(toolName, args, result) {
   }
 }
 
+/**
+ * Prints a timing and token-usage footer line to stdout after a task completes.
+ * No-ops when `process.stdout.isTTY` is falsy.
+ *
+ * @param {number} elapsedMs - Wall-clock time for the task in milliseconds.
+ * @param {{ promptTokens?: number, completionTokens?: number } | undefined} tokenStats
+ *   Aggregated token counts from the agentic loop.
+ * @returns {void}
+ */
 function renderStatsLine(elapsedMs, tokenStats) {
   if (!process.stdout.isTTY) return
   const secs = (elapsedMs / 1000).toFixed(1)
   const prompt = fmtTokens(tokenStats?.promptTokens ?? 0)
   const completion = fmtTokens(tokenStats?.completionTokens ?? 0)
-  console.log(
-    `\n${C.dim}⏱  ${secs}s  ·  ↑${prompt} prompt  ↓${completion} completion${C.reset}`,
-  )
+  console.log(`\n${C.dim}⏱  ${secs}s  ·  ↑${prompt} prompt  ↓${completion} completion${C.reset}`)
 }
 
+/**
+ * Creates a terminal spinner that writes animated Braille frames to stdout.
+ * All methods are safe to call when `process.stdout.isTTY` is falsy — they
+ * become no-ops in that case.
+ *
+ * @param {string} [label='thinking'] - Default label shown next to the spinner frame.
+ * @returns {{
+ *   start:  (text?: string) => void,
+ *   update: (text: string) => void,
+ *   stop:   () => void
+ * }} Spinner control object:
+ *   - `start(text?)` — hides the cursor and begins the animation interval;
+ *     falls back to `label` if `text` is omitted.
+ *   - `update(text)` — overwrites the current spinner line with a new label
+ *     without restarting the interval.
+ *   - `stop()` — cancels the interval, clears the spinner line, and restores
+ *     the cursor.
+ */
 function createSpinner(label = 'thinking') {
   const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
   let i = 0
@@ -140,6 +203,16 @@ function createSpinner(label = 'thinking') {
   }
 }
 
+/**
+ * Writes a fresh LUPIN.md to `projectRoot`, or updates it in place if one
+ * already exists, by rendering the provided workspace snapshot via
+ * `renderLupinMd`. Any previous content is passed to `renderLupinMd` so it
+ * can perform incremental updates.
+ *
+ * @param {string} projectRoot - Absolute path to the project root directory.
+ * @param {object} snapshot - Workspace snapshot produced by `workspaceInit.mjs`.
+ * @returns {Promise<string>} Resolves with the absolute path to the written LUPIN.md file.
+ */
 async function writeOrRefreshLupinMd(projectRoot, snapshot) {
   const lupinMdPath = path.join(projectRoot, 'LUPIN.md')
   let previousContent = ''
@@ -173,10 +246,23 @@ const __dirname = path.dirname(__filename)
 const APP_ROOT = path.resolve(__dirname, '..')
 const PROMPT = '\x1b[38;5;245m>\x1b[0m '
 
+/**
+ * Returns a uniformly random element from the given array.
+ *
+ * @template T
+ * @param {T[]} list - The array to pick from.
+ * @returns {T} A random element.
+ */
 function pickRandom(list) {
   return list[Math.floor(Math.random() * list.length)]
 }
 
+/**
+ * Prints the CLI usage help text to stdout, covering both command-line flags
+ * and interactive slash commands.
+ *
+ * @returns {void}
+ */
 function printHelp() {
   console.log(
     [
@@ -209,9 +295,24 @@ function printHelp() {
   )
 }
 
+/**
+ * Parses a `process.argv`-style argument vector into a structured flags object.
+ * Supports `--help` / `-h`, `--init`, `--context`, `--task <value>`, and
+ * `--model <value>`.
+ *
+ * @param {string[]} argv - The raw argument vector (typically `process.argv`).
+ * @returns {{ help: boolean, init: boolean, context: boolean, task: string|null, model: string|null }}
+ *   Parsed flags object.
+ */
 function parseArgv(argv) {
   const args = argv.slice(2)
-  const result = { help: false, init: false, context: false, task: null, model: null }
+  const result = {
+    help: false,
+    init: false,
+    context: false,
+    task: null,
+    model: null,
+  }
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--help' || args[i] === '-h') {
       result.help = true
@@ -228,12 +329,36 @@ function parseArgv(argv) {
   return result
 }
 
+/**
+ * Strips a leading `"assistant>"` prefix (case-insensitive) from user input
+ * and trims surrounding whitespace. Guards against accidental echo of the
+ * REPL prompt being pasted back into the input.
+ *
+ * @param {string} text - Raw input string from the user.
+ * @returns {string} Cleaned input string.
+ */
 function normalizeUserInput(text) {
   return String(text || '')
     .replace(/^\s*assistant>\s*/i, '')
     .trim()
 }
 
+/**
+ * Formats a raw tool result payload into a human-readable string for direct
+ * CLI display (i.e. outside the agentic loop, e.g. via `/read` or `/grep`).
+ *
+ * Handles the following result shapes:
+ * - `{ files: string[] }` — prints one file path per line.
+ * - `{ content: string, path?, truncated? }` — prints file content with an
+ *   optional path header and truncation notice.
+ * - `{ matches: string[] }` — prints one match per line.
+ * - `{ stdout?: string, stderr?: string }` — prints command output.
+ * - Anything else — pretty-printed JSON fallback.
+ *
+ * @param {{ ok: boolean, error?: string, result?: object } | undefined} payload
+ *   The raw payload returned by `ToolRuntime.execute`.
+ * @returns {string} Human-readable string ready to be passed to `console.log`.
+ */
 function renderDirectToolResult(payload) {
   if (!payload?.ok) {
     return `Tool error: ${payload?.error || 'unknown error'}`
@@ -266,6 +391,17 @@ function renderDirectToolResult(payload) {
   return JSON.stringify(result, null, 2)
 }
 
+/**
+ * Parses the argument string that follows a `/grep` slash command into a
+ * structured object containing the search pattern and an optional path.
+ *
+ * Syntax: `<pattern> [--path <path>]`
+ *
+ * @param {string} raw - The raw text after `/grep ` has been stripped.
+ * @returns {{ pattern: string, path: string } | { error: string }}
+ *   On success: `{ pattern, path }` where `path` defaults to `'.'`.
+ *   On failure: `{ error }` with a usage hint string.
+ */
 function parseGrepInput(raw) {
   const text = String(raw || '').trim()
   if (!text) return { error: 'Usage: /grep <pattern> [--path <path>]' }
@@ -280,6 +416,21 @@ function parseGrepInput(raw) {
   return { pattern, path }
 }
 
+/**
+ * CLI entry point for Lupin. Responsibilities:
+ * - Parses argv flags and handles `--help`, `--context`, `--init`, and
+ *   `--task` non-interactive modes.
+ * - Initializes all subsystems: `OllamaAdapter`, `ToolRuntime`, `SessionStore`,
+ *   `QueryEngine`, and workspace context.
+ * - Starts the interactive readline REPL loop and dispatches slash commands
+ *   (`/help`, `/exit`, `/status`, `/context`, `/init`, `/refresh`, `/model`,
+ *   `/health`, `/files`, `/read`, `/grep`, `/bash`, `/code`).
+ * - For regular task input, runs `QueryEngine.runTask` with streaming callbacks,
+ *   spinner feedback, edit diffs, and stats footer, then persists the session.
+ *
+ * @returns {Promise<void>} Resolves when the process is ready to exit (non-interactive
+ *   modes) or never resolves (interactive REPL — process exits via `rl.close`).
+ */
 async function main() {
   const flags = parseArgv(process.argv)
 
@@ -297,7 +448,18 @@ async function main() {
   const model = new OllamaAdapter(config.ollama)
   const toolRuntime = new ToolRuntime({
     projectRoot: config.projectRoot,
-    tools: [BashTool, FileBatchReadTool, FileDeleteTool, FileEditTool, FileReadTool, FileWriteTool, GlobTool, GrepTool, WebFetchTool, WebSearchTool],
+    tools: [
+      BashTool,
+      FileBatchReadTool,
+      FileDeleteTool,
+      FileEditTool,
+      FileReadTool,
+      FileWriteTool,
+      GlobTool,
+      GrepTool,
+      WebFetchTool,
+      WebSearchTool,
+    ],
     securityConfig: config.security,
     debug: config.debug,
   })
@@ -349,8 +511,14 @@ async function main() {
     const history = sessionStore.getModelHistory(config.agent.maxHistory)
     const result = await queryEngine.runTask(flags.task, history)
     console.log(result.answer)
-    sessionStore.appendWithMeta('user', flags.task, { kind: 'code', mode: 'code' })
-    sessionStore.appendWithMeta('assistant', result.answer, { kind: 'code', mode: 'code' })
+    sessionStore.appendWithMeta('user', flags.task, {
+      kind: 'code',
+      mode: 'code',
+    })
+    sessionStore.appendWithMeta('assistant', result.answer, {
+      kind: 'code',
+      mode: 'code',
+    })
     await sessionStore.save()
     process.exit(0)
   }
@@ -379,7 +547,7 @@ async function main() {
   let queue = Promise.resolve()
   let currentWorkspaceContext = workspaceContext
 
-  rl.on('line', line => {
+  rl.on('line', (line) => {
     queue = queue
       .then(async () => {
         const input = normalizeUserInput(line)
@@ -420,16 +588,8 @@ async function main() {
         if (input === '/context') {
           console.log(`Workspace: ${config.projectRoot}`)
           console.log(`Git root: ${currentWorkspaceContext.gitRoot || 'not detected'}`)
-          console.log(
-            `Markers: ${
-              currentWorkspaceContext.markers.length
-                ? currentWorkspaceContext.markers.join(', ')
-                : 'none'
-            }`,
-          )
-          console.log(
-            `README summary: ${currentWorkspaceContext.readmeSummary || 'not available'}`,
-          )
+          console.log(`Markers: ${currentWorkspaceContext.markers.length ? currentWorkspaceContext.markers.join(', ') : 'none'}`)
+          console.log(`README summary: ${currentWorkspaceContext.readmeSummary || 'not available'}`)
           console.log('Top-level entries:')
           for (const entry of currentWorkspaceContext.topLevel.slice(0, 16)) {
             console.log(`- ${entry}`)
@@ -518,7 +678,9 @@ async function main() {
             safePrompt()
             return
           }
-          const payload = await toolRuntime.execute('FileReadTool', { path: filePath })
+          const payload = await toolRuntime.execute('FileReadTool', {
+            path: filePath,
+          })
           console.log(renderDirectToolResult(payload))
           await sessionStore.save()
           safePrompt()
@@ -625,7 +787,7 @@ async function main() {
         await sessionStore.save()
         safePrompt()
       })
-      .catch(async error => {
+      .catch(async (error) => {
         // Ensure spinner is cleared on unexpected errors
         process.stdout.write('\r\x1b[2K\x1b[?25h')
         console.log(`Error: ${String(error?.message || error)}`)
@@ -637,7 +799,7 @@ async function main() {
   })
 }
 
-main().catch(error => {
+main().catch((error) => {
   console.error('Fatal error:', error)
   process.exit(1)
 })

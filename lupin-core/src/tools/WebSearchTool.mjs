@@ -1,6 +1,18 @@
+/** @module WebSearchTool */
+
+/** Timeout in milliseconds for the DuckDuckGo search HTTP request. */
 const SEARCH_TIMEOUT_MS = 15000
+/** Maximum number of search results to return. */
 const MAX_RESULTS = 8
 
+/**
+ * Decodes a DuckDuckGo redirect URL (`uddg` parameter) into the real destination URL.
+ *
+ * @param {string} href - Raw href attribute value from a DDG result anchor, e.g.
+ *   `"//duckduckgo.com/l/?uddg=https%3A%2F%2F...&rut=..."`.
+ * @returns {string} The decoded destination URL, or a best-effort absolute URL when
+ *   the `uddg` parameter is absent.
+ */
 function decodeUddg(href) {
   // href = "//duckduckgo.com/l/?uddg=https%3A%2F%2F...&rut=..."
   try {
@@ -11,6 +23,16 @@ function decodeUddg(href) {
   return href.startsWith('//') ? 'https:' + href : href
 }
 
+/**
+ * Parses raw DuckDuckGo HTML search results into a structured array.
+ *
+ * Extracts result titles, URLs (via {@link decodeUddg}), and snippet text using
+ * regular expressions against the raw HTML response body.
+ *
+ * @param {string} html - Raw HTML string from the DuckDuckGo HTML endpoint.
+ * @returns {Array<{title: string, url: string, snippet: string}>} Array of parsed search
+ *   result objects, capped at {@link MAX_RESULTS} entries.
+ */
 function parseDDGResults(html) {
   const results = []
 
@@ -40,6 +62,20 @@ function parseDDGResults(html) {
   return results
 }
 
+/**
+ * Tool definition for performing web searches via DuckDuckGo.
+ *
+ * Uses the DuckDuckGo HTML endpoint (`https://html.duckduckgo.com/html/`) — no API key
+ * required. Results are parsed from the raw HTML response and returned as a structured
+ * list of titles, URLs, and snippets.
+ *
+ * @type {{
+ *   name: string,
+ *   description: string,
+ *   schema: object,
+ *   run: (args: {query: string}) => Promise<{query: string, results: Array<{title: string, url: string, snippet: string}>, note?: string}>
+ * }}
+ */
 export const WebSearchTool = {
   name: 'WebSearchTool',
   description:
@@ -51,6 +87,17 @@ export const WebSearchTool = {
     },
     required: ['query'],
   },
+  /**
+   * Executes a DuckDuckGo search and returns parsed results.
+   *
+   * @param {{query: string}} args - Tool arguments.
+   * @param {string} args.query - The search query string.
+   * @returns {Promise<{query: string, results: Array<{title: string, url: string, snippet: string}>, note?: string}>}
+   *   Resolves with the query string and an array of result objects. If no results could be
+   *   parsed, the `note` field contains a fallback suggestion.
+   * @throws {Error} If `query` is empty, the network request fails, or DuckDuckGo returns
+   *   a non-OK HTTP status.
+   */
   async run(args) {
     const query = String(args?.query || '').trim()
     if (!query) throw new Error('query must not be empty')

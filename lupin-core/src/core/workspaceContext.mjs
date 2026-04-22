@@ -1,6 +1,19 @@
+/**
+ * @module workspaceContext
+ * @description Builds the workspace context object used to populate system prompts and
+ * drive the `/init` command. Detects git root, framework markers, README summaries,
+ * instruction files, and optionally preloads small workspaces for inline model inspection.
+ */
+
 import fs from 'node:fs'
 import path from 'node:path'
 
+/**
+ * Reads a text file from disk, returning up to `maxChars` characters.
+ * @param {string} filePath - Absolute or relative path to the file.
+ * @param {number} [maxChars=12000] - Maximum number of characters to return.
+ * @returns {string|null} File contents (possibly truncated), or `null` if the file cannot be read.
+ */
 function readTextFile(filePath, maxChars = 12000) {
   try {
     return fs.readFileSync(filePath, 'utf8').slice(0, maxChars)
@@ -9,6 +22,11 @@ function readTextFile(filePath, maxChars = 12000) {
   }
 }
 
+/**
+ * Returns all top-level directory entries for the given project root.
+ * @param {string} projectRoot - Path to the project root directory.
+ * @returns {import('node:fs').Dirent[]} Array of directory entries, or an empty array on error.
+ */
 function readTopLevelEntries(projectRoot) {
   try {
     return fs.readdirSync(projectRoot, { withFileTypes: true })
@@ -17,6 +35,14 @@ function readTopLevelEntries(projectRoot) {
   }
 }
 
+/**
+ * Extracts a short plain-text summary from the project README.
+ * Tries `README.md`, `readme.md`, and `README` in order. Strips Markdown
+ * heading markers, blockquote prefixes, image syntax, and link syntax before
+ * returning the first few non-empty, non-heading lines joined into one string.
+ * @param {string} projectRoot - Path to the project root directory.
+ * @returns {string|null} A summary string up to 320 characters, or `null` if no README is found.
+ */
 function readReadmeSummary(projectRoot) {
   const candidates = ['README.md', 'readme.md', 'README']
   for (const name of candidates) {
@@ -39,6 +65,11 @@ function readReadmeSummary(projectRoot) {
   return null
 }
 
+/**
+ * Walks up the directory tree from `projectRoot` to find the nearest `.git` directory.
+ * @param {string} projectRoot - Starting directory for the upward search.
+ * @returns {string|null} Absolute path of the git root directory, or `null` if not found.
+ */
 function detectGitRoot(projectRoot) {
   let current = path.resolve(projectRoot)
   while (true) {
@@ -53,15 +84,36 @@ function detectGitRoot(projectRoot) {
   }
 }
 
+/** Regex matching source file extensions that are eligible for workspace preloading. */
 const SOURCE_EXTENSIONS = /\.(js|mjs|cjs|ts|tsx|jsx|html|css|scss|json|md|py|go|rs|rb|sh|yaml|yml|toml|env\.example)$/i
+
+/** Set of directory names that are skipped entirely during workspace preload walks. */
 const SKIP_PRELOAD = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__', 'coverage', '.turbo'])
+
+/** Maximum number of files collected during a single workspace preload pass. */
 const PRELOAD_MAX_FILES = 20
+
+/** Maximum total byte size (80 KB) of content collected during a workspace preload pass. */
 const PRELOAD_MAX_BYTES = 80 * 1024 // 80KB total
 
+/**
+ * Recursively collects source files from the workspace up to hard size and count limits.
+ * Returns `null` when the workspace is too large for inline preloading, signalling
+ * that the model should inspect files individually instead.
+ * @param {string} projectRoot - Root directory to scan.
+ * @returns {{ path: string, content: string }[]|null} Array of objects with `path` (relative
+ *   to `projectRoot`) and `content` fields, or `null` if the limits are exceeded or no
+ *   eligible files are found.
+ */
 export function preloadWorkspaceFiles(projectRoot) {
   const files = []
   let totalBytes = 0
 
+  /**
+   * Recursively walks a directory, collecting eligible source files into the outer
+   * `files` array. Stops early once `PRELOAD_MAX_FILES` or `PRELOAD_MAX_BYTES` is reached.
+   * @param {string} dir - Absolute path of the directory to walk.
+   */
   function walk(dir) {
     let entries
     try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
@@ -90,6 +142,21 @@ export function preloadWorkspaceFiles(projectRoot) {
   return files.length > 0 ? files : null
 }
 
+/**
+ * Builds a snapshot of the workspace for injection into system prompts.
+ * Collects the top-level directory listing, well-known framework marker files,
+ * agent instruction files (e.g. `LUPIN.md`, `CLAUDE.md`), a README summary,
+ * and the detected git root.
+ * @param {string} projectRoot - Path to the project root directory.
+ * @returns {{
+ *   projectRoot: string,
+ *   gitRoot: string|null,
+ *   markers: string[],
+ *   topLevel: string[],
+ *   readmeSummary: string|null,
+ *   instructionFiles: { path: string, content: string }[]
+ * }} Workspace context object ready for use in system prompt construction.
+ */
 export function buildWorkspaceContext(projectRoot) {
   const resolvedRoot = path.resolve(projectRoot)
   const entries = readTopLevelEntries(resolvedRoot)

@@ -1,21 +1,32 @@
-import {
-  extractJsonObject,
-  isValidFinalShape,
-  isValidToolCallShape,
-  normalizeShape,
-} from './jsonProtocol.mjs'
+/**
+ * @module queryEngine
+ * Agentic loop engine that drives multi-step tool-use tasks.
+ * Manages workflow guards (inspect → edit → verify), web-query pre-fetching,
+ * streaming model output, and loop detection.
+ */
+
+import { extractJsonObject, isValidFinalShape, isValidToolCallShape, normalizeShape } from './jsonProtocol.mjs'
 import { preloadWorkspaceFiles } from './workspaceContext.mjs'
 
+/**
+ * Unescapes common JSON string escape sequences in a raw string.
+ * Used to clean streamed content tokens before emitting them to the caller.
+ *
+ * @param {string} str - The string containing JSON escape sequences.
+ * @returns {string} The unescaped string.
+ */
 function unescapeJson(str) {
-  return str
-    .replace(/\\n/g, '\n')
-    .replace(/\\t/g, '\t')
-    .replace(/\\r/g, '')
-    .replace(/\\"/g, '"')
-    .replace(/\\\\/g, '\\')
+  return str.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '').replace(/\\"/g, '"').replace(/\\\\/g, '\\')
 }
 import { buildSystemPrompt } from '../prompt/systemPrompt.mjs'
 
+/**
+ * Strips a leading "assistant>" prefix from task text and normalizes internal
+ * whitespace to a single space.
+ *
+ * @param {string} task - Raw task string, potentially prefixed with "assistant>".
+ * @returns {string} Cleaned, trimmed task string.
+ */
 function normalizeTaskText(task) {
   return String(task || '')
     .replace(/^\s*assistant>\s*/i, '')
@@ -23,6 +34,13 @@ function normalizeTaskText(task) {
     .trim()
 }
 
+/**
+ * Keyword heuristic that detects whether a task is a question about the current
+ * repository or codebase. Supports English and Italian phrases.
+ *
+ * @param {string} task - Raw task string.
+ * @returns {boolean} `true` if the task looks like a project/repo question.
+ */
 function looksLikeProjectQuestion(task) {
   const value = normalizeTaskText(task).toLowerCase()
   if (!value) return false
@@ -41,6 +59,13 @@ function looksLikeProjectQuestion(task) {
   )
 }
 
+/**
+ * Keyword heuristic that detects whether a task requires real-time or web-sourced
+ * information (weather, news, prices, etc.). Supports English and Italian phrases.
+ *
+ * @param {string} task - Raw task string.
+ * @returns {boolean} `true` if the task looks like a web/real-time query.
+ */
 function looksLikeWebQuery(task) {
   const value = normalizeTaskText(task).toLowerCase()
   if (!value) return false
@@ -75,6 +100,12 @@ function looksLikeWebQuery(task) {
   )
 }
 
+/**
+ * Builds a system-injection string that instructs the model to use WebSearchTool
+ * immediately and ignore any prior refusals about web access.
+ *
+ * @returns {string} A single-line instruction string for injection into the message list.
+ */
 function buildWebQueryInstruction() {
   return [
     'WEB_QUERY:',
@@ -87,6 +118,13 @@ function buildWebQueryInstruction() {
   ].join(' ')
 }
 
+/**
+ * Keyword heuristic that detects whether a task involves writing or modifying code
+ * (implement, fix, refactor, add, create, etc.).
+ *
+ * @param {string} task - Raw task string.
+ * @returns {boolean} `true` if the task looks like a coding/implementation request.
+ */
 function looksLikeImplementationTask(task) {
   const value = normalizeTaskText(task).toLowerCase()
   if (!value) return false
@@ -104,6 +142,12 @@ function looksLikeImplementationTask(task) {
   )
 }
 
+/**
+ * Builds a system-injection string that enforces the inspect → edit → verify
+ * workflow for implementation tasks.
+ *
+ * @returns {string} A single-line instruction string for injection into the message list.
+ */
 function buildImplementationWorkflowInstruction() {
   return [
     'IMPLEMENTATION_WORKFLOW:',
@@ -118,11 +162,16 @@ function buildImplementationWorkflowInstruction() {
   ].join(' ')
 }
 
+/**
+ * Builds a system-injection string that instructs the model to explore the
+ * repository structure before answering a project-level question.
+ *
+ * @param {object}   workspaceContext         - Workspace context object produced by `workspaceContext.mjs`.
+ * @param {string[]} workspaceContext.markers - Detected manifest/marker filenames (e.g. `package.json`).
+ * @returns {string} A single-line instruction string for injection into the message list.
+ */
 function buildProjectProbeInstruction(workspaceContext) {
-  const targets = [
-    'README.md',
-    ...workspaceContext.markers.filter(name => name !== 'README.md'),
-  ].slice(0, 6)
+  const targets = ['README.md', ...workspaceContext.markers.filter((name) => name !== 'README.md')].slice(0, 6)
 
   return [
     'PROJECT_PROBE:',
@@ -133,6 +182,13 @@ function buildProjectProbeInstruction(workspaceContext) {
   ].join(' ')
 }
 
+/**
+ * Detects whether a model answer is a refusal to access the web.
+ * Matches common English and Italian refusal phrases.
+ *
+ * @param {string} answer - The model's proposed final answer text.
+ * @returns {boolean} `true` if the answer looks like a web-access refusal.
+ */
 function isWebRefusal(answer) {
   const v = String(answer || '').toLowerCase()
   return (
@@ -152,13 +208,22 @@ function isWebRefusal(answer) {
   )
 }
 
+/**
+ * Detects whether a model answer is vague, empty, or otherwise useless
+ * (e.g. "Unknown", an apology, or a placeholder string).
+ *
+ * @param {string} answer - The model's proposed final answer text.
+ * @returns {boolean} `true` if the answer should be treated as weak/unusable.
+ */
 function isWeakFinalAnswer(answer) {
-  const value = String(answer || '').trim().toLowerCase()
+  const value = String(answer || '')
+    .trim()
+    .toLowerCase()
   if (!value) return true
   if (value === 'unknown') return true
   if (value.startsWith('unknown.')) return true
   if (value.includes('no information about the project is available yet')) return true
-  if (value.includes('inspected “init” file')) return true
+  if (value.includes('inspected "init" file')) return true
   if (value.includes('i apologize')) return true
   if (value.includes('sorry')) return true
   if (value.includes('let me try again')) return true
@@ -166,21 +231,28 @@ function isWeakFinalAnswer(answer) {
   return false
 }
 
+/**
+ * Constructs a human-readable fallback answer derived purely from workspace
+ * context signals (markers, README summary, top-level entries) when the model
+ * fails to produce a useful response.
+ *
+ * @param {object}           workspaceContext                 - Workspace context object produced by `workspaceContext.mjs`.
+ * @param {string[]}         workspaceContext.markers         - Detected manifest/marker filenames.
+ * @param {string[]}         workspaceContext.topLevel        - Top-level directory/file entries.
+ * @param {string|undefined} workspaceContext.readmeSummary   - Optional README summary text.
+ * @returns {string} A fallback answer string safe to return directly to the user.
+ */
 function buildWorkspaceFallback(workspaceContext) {
-  const markers = workspaceContext.markers.length
-    ? workspaceContext.markers.join(', ')
-    : 'no obvious manifest markers'
+  const markers = workspaceContext.markers.length ? workspaceContext.markers.join(', ') : 'no obvious manifest markers'
   const topLevel = workspaceContext.topLevel
     .slice(0, 8)
-    .map(entry => entry.replace(/^\[(dir|file)\]\s*/, ''))
+    .map((entry) => entry.replace(/^\[(dir|file)\]\s*/, ''))
     .join(', ')
 
   return [
     'I do not have enough inspected implementation detail for a strong answer yet, but this repository already looks structured rather than empty.',
     `I can see workspace signals like ${markers}.`,
-    workspaceContext.readmeSummary
-      ? `The README suggests: ${workspaceContext.readmeSummary}`
-      : 'There is no useful README summary yet.',
+    workspaceContext.readmeSummary ? `The README suggests: ${workspaceContext.readmeSummary}` : 'There is no useful README summary yet.',
     topLevel ? `Top-level entries include ${topLevel}.` : '',
     'Ask again after /init or tell Lupin to inspect the repository first, and it should answer with something more concrete.',
   ]
@@ -188,10 +260,24 @@ function buildWorkspaceFallback(workspaceContext) {
     .join(' ')
 }
 
+/**
+ * Returns `true` if the given tool name is a read-only inspection tool
+ * (GlobTool, GrepTool, or FileReadTool).
+ *
+ * @param {string} toolName - The tool name to test.
+ * @returns {boolean} `true` for inspection-only tools.
+ */
 function isInspectionTool(toolName) {
   return toolName === 'GlobTool' || toolName === 'GrepTool' || toolName === 'FileReadTool'
 }
 
+/**
+ * Returns `true` if the given bash command string looks like a verification
+ * command (test runner, linter, type-checker, etc.).
+ *
+ * @param {string} command - The shell command string to inspect.
+ * @returns {boolean} `true` if the command is a recognized verification command.
+ */
 function isVerificationBash(command) {
   const value = String(command || '').toLowerCase()
   return (
@@ -206,7 +292,19 @@ function isVerificationBash(command) {
   )
 }
 
+/**
+ * Drives the agentic loop for a single task. Orchestrates model calls,
+ * tool execution, streaming, workflow guards, and loop detection.
+ */
 export class QueryEngine {
+  /**
+   * @param {object}      options
+   * @param {object}      options.modelAdapter              - OllamaAdapter (or compatible) model client.
+   * @param {object}      options.toolRuntime               - ToolRuntime instance for tool execution and workspace context.
+   * @param {number}      [options.maxSteps=12]             - Maximum number of agentic loop steps before forcing a final answer.
+   * @param {boolean}     [options.debug=false]             - If `true`, emits verbose step/tool diagnostics to stderr.
+   * @param {object|null} [options.initSnapshot=null]       - Initial workspace snapshot injected into every system prompt.
+   */
   constructor({ modelAdapter, toolRuntime, maxSteps = 12, debug = false, initSnapshot = null }) {
     this.modelAdapter = modelAdapter
     this.toolRuntime = toolRuntime
@@ -215,10 +313,34 @@ export class QueryEngine {
     this.initSnapshot = initSnapshot
   }
 
+  /**
+   * Updates the stored workspace snapshot that is injected into every system prompt.
+   *
+   * @param {object} snapshot - New workspace snapshot produced by `workspaceInit.mjs`.
+   * @returns {void}
+   */
   setSnapshot(snapshot) {
     this.initSnapshot = snapshot
   }
 
+  /**
+   * Streams a model response, detects whether it is a `final` answer or a
+   * `tool_call`, and pipes decoded content tokens to `onFinalToken` in real time.
+   * Returns the complete raw response text for subsequent JSON parsing.
+   *
+   * The stream progresses through internal phases:
+   * - `detect`       — inspects the first `DETECT_LIMIT` characters to classify the response type.
+   * - `tool_call`    — drains the stream silently; no tokens are emitted.
+   * - `final_seek`   — scans for the `"content":` key inside the JSON envelope.
+   * - `final_stream` — emits decoded content tokens while holding back a small tail
+   *                    (`HOLD` chars) to strip the closing `"}` artifact before flushing.
+   *
+   * @param {object[]}                       messages      - Message array to send to the model.
+   * @param {object}                         options       - Options forwarded verbatim to `modelAdapter.chatStream`.
+   * @param {((token: string) => void)|null} onFinalToken  - Callback invoked with each decoded content token. Pass `null` to disable streaming.
+   * @returns {Promise<string>} The full raw model response text.
+   * @throws {Error} If the model returns an empty response.
+   */
   // Stream model response, detect final answer, pipe content tokens to onFinalToken.
   // Returns full raw text for JSON parsing.
   async #collectWithStream(messages, options, onFinalToken) {
@@ -228,7 +350,9 @@ export class QueryEngine {
     const HOLD = 20 // chars to hold back to strip closing "}
     const DETECT_LIMIT = 80 // chars before we give up detecting
 
-    const emit = (str) => { if (onFinalToken && str) onFinalToken(str) }
+    const emit = (str) => {
+      if (onFinalToken && str) onFinalToken(str)
+    }
 
     const flush = () => {
       const clean = held.replace(/\\n$/, '').replace(/["\}\s`]+$/, '')
@@ -242,7 +366,14 @@ export class QueryEngine {
       if (phase === 'detect') {
         if (fullText.includes('"type":"final"') || fullText.includes('"type": "final"')) {
           phase = 'final_seek'
-        } else if (fullText.length > DETECT_LIMIT || fullText.includes('tool_call') || fullText.includes('file_write') || fullText.includes('file_read') || fullText.includes('file_delete') || fullText.includes('bash')) {
+        } else if (
+          fullText.length > DETECT_LIMIT ||
+          fullText.includes('tool_call') ||
+          fullText.includes('file_write') ||
+          fullText.includes('file_read') ||
+          fullText.includes('file_delete') ||
+          fullText.includes('bash')
+        ) {
           phase = 'tool_call'
         }
       }
@@ -270,6 +401,38 @@ export class QueryEngine {
     return fullText
   }
 
+  /**
+   * Main agentic loop. Builds the system prompt and message history, injects
+   * workflow instructions, pre-fetches web results when needed, then runs up to
+   * `maxSteps` iterations of: model call → JSON parse → tool execution or final answer.
+   *
+   * Workflow guards enforced during the loop:
+   * - Implementation tasks must inspect at least one file before finalizing.
+   * - Implementation tasks that edited files must verify before finalizing.
+   * - Web queries must attempt WebSearchTool before the model can produce a refusal.
+   * - Identical tool calls repeated 3 times in a row trigger a `LOOP_DETECTED` push-back.
+   *
+   * If `maxSteps` is exhausted, a forced final prompt is sent to the model. If that
+   * also fails to produce a valid final shape, a hard step-limit message is returned.
+   *
+   * @param {string}   task                 - The raw user task string.
+   * @param {object[]} [historyMessages=[]] - Previous conversation messages to prepend for context.
+   * @param {object}   [callbacks={}]
+   * @param {((event: {type: 'start'} | {type: 'token', value: string}) => void) | undefined} callbacks.onFinalToken
+   *   Called with `{type:'start'}` when answer streaming begins, then `{type:'token', value}` for each content token.
+   * @param {((toolName: string, args: object) => void) | undefined} callbacks.onToolCall
+   *   Called before each tool execution with the tool name and resolved arguments.
+   * @param {((toolName: string, args: object, result: object) => void) | undefined} callbacks.onToolResult
+   *   Called after each tool execution with the tool name, arguments, and result payload.
+   * @returns {Promise<{
+   *   answer:         string,
+   *   transcript:     object[],
+   *   steps:          number,
+   *   inspectedFiles: string[],
+   *   tokenStats:     { promptTokens: number, completionTokens: number }
+   * }>} Resolves with the final answer text, the full message transcript, the number of
+   *     steps consumed, the list of file paths read during the task, and aggregated token counts.
+   */
   async runTask(task, historyMessages = [], { onFinalToken, onToolCall, onToolResult } = {}) {
     const normalizedTask = normalizeTaskText(task)
     const workspaceContext = this.toolRuntime.getWorkspaceContext()
@@ -277,16 +440,8 @@ export class QueryEngine {
     const implementationTask = looksLikeImplementationTask(normalizedTask)
     const webQuery = looksLikeWebQuery(normalizedTask)
     const preloadedFiles = preloadWorkspaceFiles(this.toolRuntime.projectRoot)
-    const systemPrompt = buildSystemPrompt(
-      this.toolRuntime.listTools(),
-      workspaceContext,
-      this.initSnapshot,
-      preloadedFiles,
-    )
-    const messages = [
-      { role: 'system', content: systemPrompt },
-      ...historyMessages,
-    ]
+    const systemPrompt = buildSystemPrompt(this.toolRuntime.listTools(), workspaceContext, this.initSnapshot, preloadedFiles)
+    const messages = [{ role: 'system', content: systemPrompt }, ...historyMessages]
 
     if (looksLikeProjectQuestion(normalizedTask)) {
       messages.push({
@@ -305,7 +460,8 @@ export class QueryEngine {
     if (implementationTask && workspaceIsEmpty) {
       messages.push({
         role: 'user',
-        content: 'CREATION_TASK: the workspace is empty. Do not inspect — just create the required files directly using FileWriteTool. Write all files, then give a final answer.',
+        content:
+          'CREATION_TASK: the workspace is empty. Do not inspect — just create the required files directly using FileWriteTool. Write all files, then give a final answer.',
       })
     }
 
@@ -313,7 +469,9 @@ export class QueryEngine {
     if (webQuery) {
       try {
         onToolCall?.('WebSearchTool', { query: normalizedTask })
-        const searchResult = await this.toolRuntime.execute('WebSearchTool', { query: normalizedTask })
+        const searchResult = await this.toolRuntime.execute('WebSearchTool', {
+          query: normalizedTask,
+        })
         if (searchResult?.ok && searchResult.result?.results?.length > 0) {
           const snippets = searchResult.result.results
             .slice(0, 5)
@@ -367,11 +525,7 @@ export class QueryEngine {
           }
         : null
 
-      const raw = await this.#collectWithStream(
-        messages,
-        { options: { temperature: 0.1 } },
-        streamCallback,
-      )
+      const raw = await this.#collectWithStream(messages, { options: { temperature: 0.1 } }, streamCallback)
       // Accumulate token stats from this model call
       const stepStats = this.modelAdapter.getLastStreamStats?.()
       if (stepStats) {
@@ -388,8 +542,7 @@ export class QueryEngine {
         messages.push({ role: 'assistant', content: raw })
         messages.push({
           role: 'user',
-          content:
-            'FORMAT_ERROR: Return valid JSON only. Use {"type":"tool_call",...} or {"type":"final","content":"..."}.',
+          content: 'FORMAT_ERROR: Return valid JSON only. Use {"type":"tool_call",...} or {"type":"final","content":"..."}.',
         })
         continue
       }
@@ -426,9 +579,7 @@ export class QueryEngine {
           continue
         }
 
-        const answer = isWeakFinalAnswer(parsed.content)
-          ? buildWorkspaceFallback(workspaceContext)
-          : parsed.content
+        const answer = isWeakFinalAnswer(parsed.content) ? buildWorkspaceFallback(workspaceContext) : parsed.content
         return {
           answer,
           transcript: messages,
@@ -446,7 +597,7 @@ export class QueryEngine {
         const callKey = `${parsed.tool}:${JSON.stringify(parsed.args)}`
         recentToolCalls.push(callKey)
         if (recentToolCalls.length > 3) recentToolCalls.shift()
-        if (recentToolCalls.length === 3 && recentToolCalls.every(k => k === callKey)) {
+        if (recentToolCalls.length === 3 && recentToolCalls.every((k) => k === callKey)) {
           messages.push({ role: 'assistant', content: JSON.stringify(parsed) })
           messages.push({
             role: 'user',
@@ -474,7 +625,7 @@ export class QueryEngine {
         if (parsed.tool === 'FileReadTool' && result?.ok) {
           const readPath = String(result.result?.path || '')
           if (readPath) inspectedFiles.add(readPath)
-          if ([...changedFiles].some(file => file === readPath)) {
+          if ([...changedFiles].some((file) => file === readPath)) {
             hasVerifiedChanges = true
           }
         }
@@ -491,8 +642,8 @@ export class QueryEngine {
             parsed.tool === 'FileEditTool' && errMsg.includes('oldText not found')
               ? ' Use FileReadTool to re-read the file and copy the exact text you want to replace.'
               : parsed.tool === 'FileEditTool' && errMsg.includes('not unique')
-              ? ' Use a longer, more unique excerpt for oldText, or set replaceAll=true.'
-              : ' Fix the arguments and retry — do not give up.'
+                ? ' Use a longer, more unique excerpt for oldText, or set replaceAll=true.'
+                : ' Fix the arguments and retry — do not give up.'
           toolResultContent = `TOOL_ERROR ${parsed.tool}: ${errMsg}.${hint}`
         }
         messages.push({ role: 'user', content: toolResultContent })
@@ -502,8 +653,7 @@ export class QueryEngine {
       messages.push({ role: 'assistant', content: JSON.stringify(parsed) })
       messages.push({
         role: 'user',
-        content:
-          'INVALID_SHAPE: expected {"type":"tool_call","tool":"...","args":{...}} or {"type":"final","content":"..."}.',
+        content: 'INVALID_SHAPE: expected {"type":"tool_call","tool":"...","args":{...}} or {"type":"final","content":"..."}.',
       })
     }
 
@@ -521,9 +671,7 @@ export class QueryEngine {
       )
       const forcedParsed = extractJsonObject(forcedRaw)
       if (isValidFinalShape(forcedParsed)) {
-        const answer = isWeakFinalAnswer(forcedParsed.content)
-          ? buildWorkspaceFallback(workspaceContext)
-          : forcedParsed.content
+        const answer = isWeakFinalAnswer(forcedParsed.content) ? buildWorkspaceFallback(workspaceContext) : forcedParsed.content
         return {
           answer,
           transcript: messages,
@@ -535,8 +683,7 @@ export class QueryEngine {
     } catch {}
 
     return {
-      answer:
-        'I reached the step limit before finishing. Try refining the task or using /status to verify model connectivity.',
+      answer: 'I reached the step limit before finishing. Try refining the task or using /status to verify model connectivity.',
       transcript: messages,
       steps: this.maxSteps,
       inspectedFiles: [...inspectedFiles],
