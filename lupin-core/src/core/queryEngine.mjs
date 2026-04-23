@@ -215,7 +215,7 @@ function isWebRefusal(answer) {
  * @param {string} answer - The model's proposed final answer text.
  * @returns {boolean} `true` if the answer should be treated as weak/unusable.
  */
-function isWeakFinalAnswer(answer) {
+export function isWeakFinalAnswer(answer) {
   const raw = String(answer || '').trim()
   if (!raw) return true
   const value = raw.toLowerCase()

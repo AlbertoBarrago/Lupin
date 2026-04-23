@@ -44,11 +44,12 @@
 ## Priority 3
 
 - **Add tests.**
-  Zero test files exist. Highest-value targets: workspace detection (`workspaceInit.mjs`),
-  system prompt construction, `FileEditTool` edge cases (non-unique match, out-of-range
-  line numbers), and weak-answer fallback logic in `QueryEngine`.
+  Done: 32 tests across 4 files (`lupin-core/tests/`) using `node:test` (zero deps).
+  Covers: `FileEditTool` all three modes + edge cases, `buildSystemPrompt`, `renderLupinMd`
+  / `formatWorkspaceSnapshot`, and `isWeakFinalAnswer` (now exported). Run: `npm test`.
 
 - **Terminal UX polish.**
-  Spinner and stats line are in. Small remaining gaps: clearer error formatting when a
-  tool fails mid-task, better multi-step progress indication, and friendlier output when
-  Ollama is unreachable at startup.
+  Done: tool fail mid-task → spinner stops, red `✗ toolname: error` line, spinner
+  resumes as "retrying". Step counter in spinner label `(N)` tracks tool calls.
+  Startup non-blocking Ollama healthcheck → yellow `⚠` with `ollama serve` hint
+  if unreachable.

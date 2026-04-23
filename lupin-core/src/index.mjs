@@ -531,6 +531,14 @@ async function main() {
   console.log(`Ollama: ${config.ollama.baseUrl} | model: ${config.ollama.model}`)
   console.log('Type /help to get started.')
 
+  // Non-blocking startup healthcheck — warn immediately if Ollama is down
+  model.healthcheck().then((ok) => {
+    if (!ok) {
+      console.log(`${C.yellow}⚠  Ollama unreachable at ${config.ollama.baseUrl}${C.reset}`)
+      console.log(`${C.dim}   Run: ollama serve && ollama pull ${config.ollama.model}${C.reset}`)
+    }
+  }).catch(() => {})
+
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -764,6 +772,7 @@ async function main() {
 
         const taskStart = Date.now()
         let streamingActive = false
+        let toolStepCount = 0
 
         const onFinalToken = (event) => {
           if (event.type === 'start') {
@@ -777,11 +786,19 @@ async function main() {
 
         const onToolCall = (toolName, args) => {
           if (!process.stdout.isTTY) return
+          toolStepCount++
           const label = formatToolLabel(toolName, args)
-          spinner.update(`${label}`)
+          spinner.update(`${label} (${toolStepCount})`)
         }
 
         const onToolResult = (toolName, args, result) => {
+          if (!result?.ok && process.stdout.isTTY) {
+            spinner.stop()
+            const errSnippet = String(result?.error || 'failed').split('\n')[0].slice(0, 80)
+            console.log(`${C.red}  ✗ ${formatToolLabel(toolName, args)}: ${errSnippet}${C.reset}`)
+            spinner.start('retrying')
+            return
+          }
           if (toolName === 'FileEditTool' || toolName === 'FileWriteTool') {
             spinner.stop()
             renderEditDiff(toolName, args, result)
