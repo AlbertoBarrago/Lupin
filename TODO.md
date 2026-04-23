@@ -27,20 +27,19 @@
 ## Priority 2
 
 - **Add automatic LUPIN.md update proposals.**
-  `/init` and `/refresh` are manual. Lupin should be able to notice when it has learned
-  something new about the repo (new entrypoint, confirmed test command, architectural note)
-  and offer to fold it into `LUPIN.md` without the user having to ask.
+  Done: after any task where files were inspected and `LUPIN.md` exists in the project
+  root, `index.mjs` prints a dim hint `run /init to update LUPIN.md`. Fires once per
+  session to avoid noise.
 
 - **Better summaries for large repos.**
-  The current preload strategy caps at 20 files / 80 KB and falls back to per-tool
-  inspection. For large repos, Lupin should build a concise structural summary from
-  inspected evidence (hotspots, key dirs, entrypoints) rather than leaving the model
-  to piece it together across many steps.
+  Done: `QueryEngine.runTask` now injects a `REPO_SUMMARY` message when preload returns
+  null but a snapshot exists. Gives the model stack, frameworks, entry files, hotspots,
+  and key dirs as a compact starting map — saves exploratory steps on large repos.
 
 - **Expose session introspection to the user.**
-  `recentToolCalls` is tracked in `QueryEngine` but never surfaced. A `/debug` or
-  expanded `/status` command showing the last N tool calls, their outcomes, and any
-  workflow guard triggers would make behavior easier to diagnose.
+  Done: `runTask` now returns `toolLog` (full per-step tool call history with ok/fail)
+  and `changedFiles`. New `/debug` command in `index.mjs` displays step count, per-tool
+  results, inspected files, changed files, and token stats from the last task.
 
 ## Priority 3
 

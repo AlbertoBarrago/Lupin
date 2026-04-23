@@ -285,6 +285,7 @@ function printHelp() {
       '  /model [name]               Get or set Ollama model',
       '  /health                     Check Ollama connectivity',
       '  /code <task>                Run a task explicitly',
+      '  /debug                      Show tool calls, files, and token stats from last task',
       '  /files [regex]              List files (optional regex filter)',
       '  /read <path>                Read a file directly',
       '  /grep <pattern> [--path p]  Search text directly',
@@ -546,6 +547,8 @@ async function main() {
 
   let queue = Promise.resolve()
   let currentWorkspaceContext = workspaceContext
+  let lastTaskResult = null
+  let lupinMdProposalShown = false
 
   rl.on('line', (line) => {
     queue = queue
@@ -581,6 +584,32 @@ async function main() {
             console.log(formatWorkspaceSnapshot(snapshot))
           }
           await sessionStore.save()
+          safePrompt()
+          return
+        }
+
+        if (input === '/debug') {
+          if (!lastTaskResult) {
+            console.log('No task run yet this session.')
+          } else {
+            const r = lastTaskResult
+            console.log(`Steps: ${r.steps}`)
+            console.log(`Tools used: ${r.toolLog.length}`)
+            if (r.toolLog.length > 0) {
+              for (const entry of r.toolLog) {
+                const argSummary = entry.args.path || entry.args.command?.slice(0, 40) || entry.args.query?.slice(0, 40) || entry.args.pattern || ''
+                const status = entry.ok ? `${C.green}ok${C.reset}` : `${C.red}fail${C.reset}`
+                console.log(`  step ${entry.step}: ${entry.tool}(${argSummary}) → ${status}`)
+              }
+            }
+            if (r.inspectedFiles.length > 0) {
+              console.log(`Inspected: ${r.inspectedFiles.join(', ')}`)
+            }
+            if (r.changedFiles.length > 0) {
+              console.log(`Changed: ${r.changedFiles.join(', ')}`)
+            }
+            console.log(`Tokens: ↑${fmtTokens(r.tokenStats?.promptTokens ?? 0)} prompt  ↓${fmtTokens(r.tokenStats?.completionTokens ?? 0)} completion`)
+          }
           safePrompt()
           return
         }
@@ -768,6 +797,7 @@ async function main() {
         const elapsed = Date.now() - taskStart
         spinner.stop()
 
+        lastTaskResult = taskResult
         const answer = taskResult.answer
         sessionStore.appendWithMeta('assistant', answer, { kind: 'code' })
 
@@ -784,6 +814,16 @@ async function main() {
         }
 
         renderStatsLine(elapsed, taskResult.tokenStats)
+
+        // Propose /init once per session when files were inspected and LUPIN.md exists
+        if (
+          !lupinMdProposalShown &&
+          taskResult.inspectedFiles.length > 0 &&
+          fs.existsSync(path.join(config.projectRoot, 'LUPIN.md'))
+        ) {
+          lupinMdProposalShown = true
+          console.log(`${C.dim}  hint: files inspected — run /init to update LUPIN.md${C.reset}`)
+        }
         await sessionStore.save()
         safePrompt()
       })

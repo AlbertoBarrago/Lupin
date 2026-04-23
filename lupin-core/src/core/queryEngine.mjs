@@ -453,6 +453,23 @@ export class QueryEngine {
       })
     }
 
+    // For large repos (preload skipped), inject pre-analyzed structural summary so
+    // the model has a starting map without burning steps on exploratory GlobTool calls.
+    if (!preloadedFiles && !workspaceIsEmpty && this.initSnapshot) {
+      const s = this.initSnapshot
+      const parts = [
+        'REPO_SUMMARY (pre-analyzed):',
+        s.stacks?.length ? `stack=${s.stacks.join('+')}` : null,
+        s.frameworks?.length ? `frameworks=${s.frameworks.join('+')}` : null,
+        s.testFramework ? `tests=${s.testFramework}` : null,
+        s.validationCommand ? `verify="${s.validationCommand}"` : null,
+        s.entrypoints?.length ? `entries=${s.entrypoints.join(',')}` : null,
+        s.hotspots?.length ? `hotspots=${s.hotspots.join(',')}` : null,
+        s.keyDirectories?.length ? `dirs=${s.keyDirectories.join(',')}` : null,
+      ].filter(Boolean).join(' ')
+      messages.push({ role: 'user', content: parts + '. Use as starting map. Still read files for implementation details.' })
+    }
+
     if (implementationTask && !workspaceIsEmpty && !preloadedFiles) {
       messages.push({
         role: 'user',
@@ -511,7 +528,8 @@ export class QueryEngine {
     let hasVerifiedChanges = false
     const changedFiles = new Set()
     const inspectedFiles = new Set()
-    const recentToolCalls = [] // loop detection
+    const recentToolCalls = [] // loop detection (rolling 3-item window)
+    const toolLog = [] // full tool call history for /debug
 
     let streamingStarted = false
 
@@ -589,6 +607,8 @@ export class QueryEngine {
           transcript: messages,
           steps: step,
           inspectedFiles: [...inspectedFiles],
+          changedFiles: [...changedFiles],
+          toolLog,
           tokenStats,
         }
       }
@@ -613,6 +633,7 @@ export class QueryEngine {
 
         const result = await this.toolRuntime.execute(parsed.tool, parsed.args || {})
         onToolResult?.(parsed.tool, parsed.args || {}, result)
+        toolLog.push({ tool: parsed.tool, args: parsed.args || {}, ok: Boolean(result?.ok), step })
         if (isInspectionTool(parsed.tool)) {
           inspectionCount += 1
         }
@@ -690,6 +711,8 @@ export class QueryEngine {
           transcript: messages,
           steps: this.maxSteps,
           inspectedFiles: [...inspectedFiles],
+          changedFiles: [...changedFiles],
+          toolLog,
           tokenStats,
         }
       }
@@ -700,6 +723,8 @@ export class QueryEngine {
       transcript: messages,
       steps: this.maxSteps,
       inspectedFiles: [...inspectedFiles],
+      changedFiles: [...changedFiles],
+      toolLog,
       tokenStats,
     }
   }
