@@ -216,10 +216,9 @@ function isWebRefusal(answer) {
  * @returns {boolean} `true` if the answer should be treated as weak/unusable.
  */
 function isWeakFinalAnswer(answer) {
-  const value = String(answer || '')
-    .trim()
-    .toLowerCase()
-  if (!value) return true
+  const raw = String(answer || '').trim()
+  if (!raw) return true
+  const value = raw.toLowerCase()
   if (value === 'unknown') return true
   if (value.startsWith('unknown.')) return true
   if (value.includes('no information about the project is available yet')) return true
@@ -228,6 +227,10 @@ function isWeakFinalAnswer(answer) {
   if (value.includes('sorry')) return true
   if (value.includes('let me try again')) return true
   if (value.includes('let us try again')) return true
+  // Weak-model filler responses
+  if (value === 'ok' || value === 'okay' || value === 'sure' || value === 'got it') return true
+  if (value.startsWith("i'll help you") || value.startsWith("i will help you")) return true
+  if (value.startsWith("of course") || value.startsWith("certainly")) return true
   return false
 }
 
@@ -539,10 +542,11 @@ export class QueryEngine {
         parsed = normalizeShape(extractJsonObject(raw))
       } catch {
         if (this.debug) process.stderr.write(`[lupin] FORMAT_ERROR at step ${step}\n`)
+        const rawSnippet = raw.slice(0, 120).replace(/\n/g, ' ')
         messages.push({ role: 'assistant', content: raw })
         messages.push({
           role: 'user',
-          content: 'FORMAT_ERROR: Return valid JSON only. Use {"type":"tool_call",...} or {"type":"final","content":"..."}.',
+          content: `FORMAT_ERROR: your response was not valid JSON. Got: "${rawSnippet}". Return ONLY one of these exact shapes — no prose, no markdown: {"type":"final","content":"your answer"} or {"type":"tool_call","tool":"ToolName","args":{...}}`,
         })
         continue
       }
@@ -638,12 +642,21 @@ export class QueryEngine {
           toolResultContent = `TOOL_RESULT ${parsed.tool}: ${JSON.stringify(result)}`
         } else {
           const errMsg = result?.error || 'unknown error'
-          const hint =
-            parsed.tool === 'FileEditTool' && errMsg.includes('oldText not found')
-              ? ' Use FileReadTool to re-read the file and copy the exact text you want to replace.'
-              : parsed.tool === 'FileEditTool' && errMsg.includes('not unique')
-                ? ' Use a longer, more unique excerpt for oldText, or set replaceAll=true.'
-                : ' Fix the arguments and retry — do not give up.'
+          let hint = ' Fix the arguments and retry — do not give up.'
+          if (parsed.tool === 'FileEditTool') {
+            const targetFile = String(parsed.args?.path || '')
+            const fileDrifted =
+              targetFile &&
+              changedFiles.size > 0 &&
+              [...changedFiles].some((f) => f === targetFile || f.endsWith('/' + targetFile) || targetFile.endsWith('/' + f))
+            if (errMsg.includes('oldText not found') || errMsg.includes('hunk context not found')) {
+              hint = fileDrifted
+                ? ` FILE_DRIFT: "${targetFile}" was already modified this session — your oldText no longer matches the current file content. Re-read it with FileReadTool now, then retry with the exact current text.`
+                : ' Use FileReadTool to re-read the file and copy the exact text you want to replace.'
+            } else if (errMsg.includes('not unique')) {
+              hint = ' Use a longer, more unique excerpt for oldText, or set replaceAll=true.'
+            }
+          }
           toolResultContent = `TOOL_ERROR ${parsed.tool}: ${errMsg}.${hint}`
         }
         messages.push({ role: 'user', content: toolResultContent })

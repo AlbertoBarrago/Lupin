@@ -6,13 +6,14 @@
   Done: unified-diff mode added to `FileEditTool` — accepts standard `@@ hunk @@` patches,
   applies hunks in reverse order, and uses fuzzy context-line matching to tolerate stale
   line numbers from the model. All three modes now: LINE-RANGE, TEXT-MATCH, UNIFIED-DIFF.
-  Remaining: smarter conflict messaging when `oldText` drifts after earlier edits in the
-  same session (currently throws; could suggest a re-read).
+  Done: `QueryEngine` now detects when `FileEditTool` fails on a file already modified
+  this session and emits a `FILE_DRIFT` message instead of the generic re-read hint.
 
 - **Make chat mode more consistent across weak models.**
-  The mode separation, history scoping, and greeting handling are solid. Remaining gap:
-  model-side reply style varies a lot on smaller Ollama models — terse, one-liner, or
-  off-format responses still slip through without useful pushback.
+  The mode separation, history scoping, and greeting handling are solid.
+  Done: `isWeakFinalAnswer` extended to catch common filler phrases ("ok", "sure",
+  "of course", "I'll help you", etc.). `FORMAT_ERROR` pushback now echoes the first
+  120 chars of the failing raw response so the model can see exactly what went wrong.
 
 - **Strengthen tool selection behavior.**
   Done: `ToolRuntime.execute()` now transparently redirects common bash-as-read patterns
