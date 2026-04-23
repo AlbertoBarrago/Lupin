@@ -1,7 +1,7 @@
 /** @module toolRuntime */
 
-import { enforcePolicy } from "./permissions.mjs";
 import { buildWorkspaceContext } from "./workspaceContext.mjs";
+import { enforcePolicy, redirectBashToTool } from "./permissions.mjs";
 
 /**
  * Manages the registry of available tools, enforces security policy,
@@ -82,6 +82,31 @@ export class ToolRuntime {
         error: policy.reason || "blocked by policy",
         risk: policy.risk,
       };
+    }
+
+    // Transparent redirect: intercept bash calls that should use a native tool.
+    // Falls through to real BashTool if the redirect target fails.
+    if (toolName === "BashTool") {
+      const redirect = redirectBashToTool(args?.command);
+      if (redirect) {
+        const nativeTool = this.tools.get(redirect.tool);
+        if (nativeTool) {
+          try {
+            const result = await nativeTool.run(redirect.args, {
+              projectRoot: this.projectRoot,
+            });
+            return {
+              ok: true,
+              tool: redirect.tool,
+              risk: "LOW",
+              result,
+              redirectNote: redirect.note,
+            };
+          } catch {
+            // redirect failed — fall through to actual BashTool below
+          }
+        }
+      }
     }
 
     try {

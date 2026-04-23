@@ -2,58 +2,53 @@
 
 ## Priority 1
 
-- Slim Lupin into a clearer core product shape.
-  Done: rebranded key user-facing entrypoints to Lupin, rewrote the root README/guide around the actual product, and removed obvious legacy leak-case-study assets.
-  Next: split top-level areas into `core`, `optional/gated`, and `legacy/removable`, then disable or extract non-essential subsystems like KAIROS/assistant, buddy, voice, and bridge/remote from the default path before deleting anything.
+- **Improve editing reliability for large or ambiguous changes.**
+  Done: unified-diff mode added to `FileEditTool` — accepts standard `@@ hunk @@` patches,
+  applies hunks in reverse order, and uses fuzzy context-line matching to tolerate stale
+  line numbers from the model. All three modes now: LINE-RANGE, TEXT-MATCH, UNIFIED-DIFF.
+  Remaining: smarter conflict messaging when `oldText` drifts after earlier edits in the
+  same session (currently throws; could suggest a re-read).
 
-- Strengthen editing reliability for implementation tasks.
-  Done: added implementation workflow guardrails, a partial-edit tool for existing files, and anchored insert-before/after edits.
-  Next: support unified-diff style edits and better conflict handling when the target text is no longer unique.
+- **Make chat mode more consistent across weak models.**
+  The mode separation, history scoping, and greeting handling are solid. Remaining gap:
+  model-side reply style varies a lot on smaller Ollama models — terse, one-liner, or
+  off-format responses still slip through without useful pushback.
 
-- Make `Lupin` more repo-aware on first contact.
-  Detect likely entrypoints, build/test commands, framework signals, and architectural hotspots without relying too much on `README.md`.
-
-- Add real CLI flags instead of only interactive slash commands.
-  Implement `--help`, `--init`, `--context`, and a non-interactive task mode so the tool works well in scripts and shell workflows.
-
-- Improve answer quality for project-level questions.
-  Force better initial inspection strategies, avoid vague fallback replies, and summarize inspected evidence before conclusions.
-
-- Add verification workflows.
-  Done: implementation tasks now require some verification before finalizing if files were edited.
-  Next: teach Lupin to infer the safest repo-native validation command automatically instead of relying on generic Bash guesses.
-
-- Make chat mode more natural and less noisy.
-  Done: separated chat history from command/code history, suppressed ambient `mg` lines for conversational replies, and added cleaner greeting handling.
-  Next: improve model-side style consistency and reduce terse low-value replies from weaker Ollama models.
+- **Strengthen tool selection behavior.**
+  Done: `ToolRuntime.execute()` now transparently redirects common bash-as-read patterns
+  (`cat`, `ls`, `find -name`, `grep`) to their native tools (`FileReadTool`, `GlobTool`,
+  `GrepTool`) before the shell is touched. Falls back to real BashTool if the redirect
+  fails. Risk classification extended to cover `FileBatchReadTool`, `FileDeleteTool`,
+  `WebSearchTool`, `WebFetchTool`.
+  Remaining: model still reaches for bash on less common patterns — monitor and extend
+  the redirect table as new cases emerge.
 
 ## Priority 2
 
-- Strengthen tool selection logic.
-  Prefer `GlobTool`, `GrepTool`, and targeted file reads before shell commands, and reduce noisy or redundant tool loops.
+- **Add automatic LUPIN.md update proposals.**
+  `/init` and `/refresh` are manual. Lupin should be able to notice when it has learned
+  something new about the repo (new entrypoint, confirmed test command, architectural note)
+  and offer to fold it into `LUPIN.md` without the user having to ask.
 
-- Improve workspace onboarding.
-  Make `/init` produce a stronger `LUPIN.md` with architecture notes, important files, commands, conventions, and preserved owner preferences.
+- **Better summaries for large repos.**
+  The current preload strategy caps at 20 files / 80 KB and falls back to per-tool
+  inspection. For large repos, Lupin should build a concise structural summary from
+  inspected evidence (hotspots, key dirs, entrypoints) rather than leaving the model
+  to piece it together across many steps.
 
-- Add project memory refinement.
-  Let Lupin update or propose edits to `LUPIN.md` as it learns the repository instead of treating it as a one-shot generated file.
-
-- Add better repository summaries.
-  Build concise summaries for large repos from inspected files rather than raw README excerpts.
+- **Expose session introspection to the user.**
+  `recentToolCalls` is tracked in `QueryEngine` but never surfaced. A `/debug` or
+  expanded `/status` command showing the last N tool calls, their outcomes, and any
+  workflow guard triggers would make behavior easier to diagnose.
 
 ## Priority 3
 
-- Audit optional subsystems before hard deletion.
-  Map what `dream`, assistant/KAIROS, buddy, voice, bridge, remote, and restore-core actually do in runtime, then decide what belongs in a minimal Lupin profile versus a power-user build.
+- **Add tests.**
+  Zero test files exist. Highest-value targets: workspace detection (`workspaceInit.mjs`),
+  system prompt construction, `FileEditTool` edge cases (non-unique match, out-of-range
+  line numbers), and weak-answer fallback logic in `QueryEngine`.
 
-- Add session introspection and debugging.
-  Expose recent tool calls, failures, and reasoning breadcrumbs in a compact way so behavior is easier to diagnose.
-
-- Improve terminal UX without turning it into fake GUI.
-  Keep the shell clean, but add small quality improvements like clearer status lines, better errors, and maybe compact progress feedback.
-
-- Add tests around onboarding and prompting.
-  Cover workspace detection, prompt building, per-workspace memory, and weak-answer fallback behavior.
-
-- Revisit branding only after behavior is solid.
-  Keep the current identity, but defer deeper visual work until the tool feels consistently sharp in real use.
+- **Terminal UX polish.**
+  Spinner and stats line are in. Small remaining gaps: clearer error formatting when a
+  tool fails mid-task, better multi-step progress indication, and friendlier output when
+  Ollama is unreachable at startup.
