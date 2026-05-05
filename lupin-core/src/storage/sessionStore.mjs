@@ -201,7 +201,7 @@ export class SessionStore {
 	async save() {
 		await fs.promises.writeFile(
 			this.filePath,
-			JSON.stringify(this.state, null, 2)`\n`,
+			`${JSON.stringify(this.state, null, 2)}\n`,
 			"utf8",
 		);
 	}

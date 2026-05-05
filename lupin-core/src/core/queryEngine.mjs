@@ -365,40 +365,33 @@ export class QueryEngine {
 
 	/**
 	 * Streams a model response, detects whether it is a `final` answer or a
-	 * `tool_call`, and pipes decoded content tokens to `onFinalToken` in real time.
-	 * Returns the complete raw response text for subsequent JSON parsing.
+	 * `tool_call`, and yields structured events for each content token.
 	 *
-	 * The stream progresses through internal phases:
+	 * Yields:
+	 * - `{type:'stream_start'}` — once, when answer content begins flowing.
+	 * - `{type:'token', value: string}` — decoded content tokens.
+	 * - `{type:'_raw', text: string}` — internal sentinel: the full raw response text
+	 *   for JSON parsing. Always the last event yielded.
+	 *
+	 * Internal phases:
 	 * - `detect`       — inspects the first `DETECT_LIMIT` characters to classify the response type.
-	 * - `tool_call`    — drains the stream silently; no tokens are emitted.
+	 * - `tool_call`    — drains the stream silently; no events emitted.
 	 * - `final_seek`   — scans for the `"content":` key inside the JSON envelope.
-	 * - `final_stream` — emits decoded content tokens while holding back a small tail
-	 *                    (`HOLD` chars) to strip the closing `"}` artifact before flushing.
+	 * - `final_stream` — yields decoded content tokens while holding back `HOLD` chars
+	 *                    to strip the closing `"}` artifact before flushing.
 	 *
-	 * @param {object[]}                       messages      - Message array to send to the model.
-	 * @param {object}                         options       - Options forwarded verbatim to `modelAdapter.chatStream`.
-	 * @param {((token: string) => void)|null} onFinalToken  - Callback invoked with each decoded content token. Pass `null` to disable streaming.
-	 * @returns {Promise<string>} The full raw model response text.
+	 * @param {object[]} messages - Message array to send to the model.
+	 * @param {object}   options  - Options forwarded verbatim to `modelAdapter.chatStream`.
+	 * @yields {{ type: 'stream_start' | 'token' | '_raw', value?: string, text?: string }}
 	 * @throws {Error} If the model returns an empty response.
 	 */
-	// Stream model response, detect final answer, pipe content tokens to onFinalToken.
-	// Returns full raw text for JSON parsing.
-	async #collectWithStream(messages, options, onFinalToken) {
+	async *#streamStep(messages, options) {
 		let fullText = "";
 		let phase = "detect"; // detect | tool_call | final_seek | final_stream
 		let held = "";
-		const HOLD = 20; // chars to hold back to strip closing "}
-		const DETECT_LIMIT = 80; // chars before we give up detecting
-
-		const emit = (str) => {
-			if (onFinalToken && str) onFinalToken(str);
-		};
-
-		const flush = () => {
-			const clean = held.replace(/\\n$/, "").replace(/["}\s`]+$/, "");
-			emit(unescapeJson(clean));
-			held = "";
-		};
+		const HOLD = 20;
+		const DETECT_LIMIT = 80;
+		let streamStarted = false;
 
 		for await (const token of this.modelAdapter.chatStream(messages, options)) {
 			fullText += token;
@@ -425,23 +418,30 @@ export class QueryEngine {
 				const m = fullText.match(/"content"\s*:\s*"/);
 				if (m) {
 					phase = "final_stream";
-					// seed held with whatever content we already have after the opening quote
 					held = fullText.slice(m.index + m[0].length);
 				}
 			} else if (phase === "final_stream") {
+				if (!streamStarted) {
+					streamStarted = true;
+					yield { type: "stream_start" };
+				}
 				held += token;
 				if (held.length > HOLD) {
 					const chunk = held.slice(0, held.length - HOLD);
 					held = held.slice(held.length - HOLD);
-					emit(unescapeJson(chunk));
+					yield { type: "token", value: unescapeJson(chunk) };
 				}
 			}
 		}
 
-		if (phase === "final_stream") flush();
+		if (phase === "final_stream") {
+			if (!streamStarted) yield { type: "stream_start" };
+			const clean = held.replace(/\\n$/, "").replace(/["}\s`]+$/, "");
+			if (clean) yield { type: "token", value: unescapeJson(clean) };
+		}
 
 		if (!fullText.trim()) throw new Error("empty ollama response");
-		return fullText;
+		yield { type: "_raw", text: fullText };
 	}
 
 	/**
@@ -460,27 +460,15 @@ export class QueryEngine {
 	 *
 	 * @param {string}   task                 - The raw user task string.
 	 * @param {object[]} [historyMessages=[]] - Previous conversation messages to prepend for context.
-	 * @param {object}   [callbacks={}]
-	 * @param {((event: {type: 'start'} | {type: 'token', value: string}) => void) | undefined} callbacks.onFinalToken
-	 *   Called with `{type:'start'}` when answer streaming begins, then `{type:'token', value}` for each content token.
-	 * @param {((toolName: string, args: object) => void) | undefined} callbacks.onToolCall
-	 *   Called before each tool execution with the tool name and resolved arguments.
-	 * @param {((toolName: string, args: object, result: object) => void) | undefined} callbacks.onToolResult
-	 *   Called after each tool execution with the tool name, arguments, and result payload.
-	 * @returns {Promise<{
-	 *   answer:         string,
-	 *   transcript:     object[],
-	 *   steps:          number,
-	 *   inspectedFiles: string[],
-	 *   tokenStats:     { promptTokens: number, completionTokens: number }
-	 * }>} Resolves with the final answer text, the full message transcript, the number of
-	 *     steps consumed, the list of file paths read during the task, and aggregated token counts.
+	 * @yields {{ type: 'tool_call',   tool: string, args: object }}
+	 * @yields {{ type: 'tool_result', tool: string, args: object, result: object }}
+	 * @yields {{ type: 'stream_start' }}
+	 * @yields {{ type: 'token',  value: string }}
+	 * @yields {{ type: 'done',   answer: string, transcript: object[], steps: number,
+	 *            inspectedFiles: string[], changedFiles: string[],
+	 *            toolLog: object[], tokenStats: { promptTokens: number, completionTokens: number } }}
 	 */
-	async runTask(
-		task,
-		historyMessages = [],
-		{ onFinalToken, onToolCall, onToolResult } = {},
-	) {
+	async *runTask(task, historyMessages = []) {
 		const normalizedTask = normalizeTaskText(task);
 		const workspaceContext = this.toolRuntime.getWorkspaceContext();
 		const workspaceIsEmpty = workspaceContext.topLevel.length === 0;
@@ -549,7 +537,7 @@ export class QueryEngine {
 		// Pre-fetch web results for web queries so model doesn't need to emit tool calls
 		if (webQuery) {
 			try {
-				onToolCall?.("WebSearchTool", { query: normalizedTask });
+				yield { type: "tool_call", tool: "WebSearchTool", args: { query: normalizedTask } };
 				const searchResult = await this.toolRuntime.execute("WebSearchTool", {
 					query: normalizedTask,
 				});
@@ -591,27 +579,20 @@ export class QueryEngine {
 		const recentToolCalls = []; // loop detection (rolling 3-item window)
 		const toolLog = []; // full tool call history for /debug
 
-		let streamingStarted = false;
-
 		for (let step = 1; step <= this.maxSteps; step++) {
 			if (this.debug)
 				process.stderr.write(`[lupin] step ${step}/${this.maxSteps}\n`);
 
-			const streamCallback = onFinalToken
-				? (token) => {
-						if (!streamingStarted) {
-							streamingStarted = true;
-							onFinalToken({ type: "start" });
-						}
-						onFinalToken({ type: "token", value: token });
-					}
-				: null;
-
-			const raw = await this.#collectWithStream(
-				messages,
-				{ options: { temperature: 0.1 } },
-				streamCallback,
-			);
+			let raw = "";
+			for await (const event of this.#streamStep(messages, {
+				options: { temperature: 0.1 },
+			})) {
+				if (event.type === "_raw") {
+					raw = event.text;
+				} else {
+					yield event;
+				}
+			}
 			// Accumulate token stats from this model call
 			const stepStats = this.modelAdapter.getLastStreamStats?.();
 			if (stepStats) {
@@ -671,7 +652,8 @@ export class QueryEngine {
 				const answer = isWeakFinalAnswer(parsed.content)
 					? buildWorkspaceFallback(workspaceContext)
 					: parsed.content;
-				return {
+				yield {
+					type: "done",
 					answer,
 					transcript: messages,
 					steps: step,
@@ -680,6 +662,7 @@ export class QueryEngine {
 					toolLog,
 					tokenStats,
 				};
+				return;
 			}
 
 			if (isValidToolCallShape(parsed)) {
@@ -687,7 +670,7 @@ export class QueryEngine {
 					process.stderr.write(
 						`[lupin] tool: ${parsed.tool} args: ${JSON.stringify(parsed.args).slice(0, 120)}\n`,
 					);
-				onToolCall?.(parsed.tool, parsed.args || {});
+				yield { type: "tool_call", tool: parsed.tool, args: parsed.args || {} };
 
 				// Loop detection: same tool + same args 3 times in a row = stuck
 				const callKey = `${parsed.tool}:${JSON.stringify(parsed.args)}`;
@@ -710,7 +693,7 @@ export class QueryEngine {
 					parsed.tool,
 					parsed.args || {},
 				);
-				onToolResult?.(parsed.tool, parsed.args || {}, result);
+				yield { type: "tool_result", tool: parsed.tool, args: parsed.args || {}, result };
 				toolLog.push({
 					tool: parsed.tool,
 					args: parsed.args || {},
@@ -808,7 +791,8 @@ export class QueryEngine {
 				const answer = isWeakFinalAnswer(forcedParsed.content)
 					? buildWorkspaceFallback(workspaceContext)
 					: forcedParsed.content;
-				return {
+				yield {
+					type: "done",
 					answer,
 					transcript: messages,
 					steps: this.maxSteps,
@@ -817,10 +801,12 @@ export class QueryEngine {
 					toolLog,
 					tokenStats,
 				};
+				return;
 			}
 		} catch {}
 
-		return {
+		yield {
+			type: "done",
 			answer:
 				"I reached the step limit before finishing. Try refining the task or using /status to verify model connectivity.",
 			transcript: messages,

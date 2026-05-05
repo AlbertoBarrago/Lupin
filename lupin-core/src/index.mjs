@@ -290,6 +290,7 @@ function printHelp() {
 			"",
 			"Interactive commands:",
 			"  /help                       Show this help",
+			"  /clear                      Clear the terminal screen",
 			"  /exit                       Exit",
 			"  /status                     Show model/workspace status",
 			"  /context                    Show repo context and loaded instruction files",
@@ -530,13 +531,17 @@ async function main() {
 	// --task: run single task non-interactively and exit
 	if (flags.task) {
 		const history = sessionStore.getModelHistory(config.agent.maxHistory);
-		const result = await queryEngine.runTask(flags.task, history);
-		console.log(result.answer);
+		let result = null;
+		for await (const event of queryEngine.runTask(flags.task, history)) {
+			if (event.type === "done") result = event;
+		}
+		const answer = result?.answer ?? "";
+		console.log(answer);
 		sessionStore.appendWithMeta("user", flags.task, {
 			kind: "code",
 			mode: "code",
 		});
-		sessionStore.appendWithMeta("assistant", result.answer, {
+		sessionStore.appendWithMeta("assistant", answer, {
 			kind: "code",
 			mode: "code",
 		});
@@ -599,6 +604,12 @@ async function main() {
 				if (input === "/help") {
 					printHelp();
 					await sessionStore.save();
+					safePrompt();
+					return;
+				}
+
+				if (input === "/clear") {
+					process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
 					safePrompt();
 					return;
 				}
@@ -832,48 +843,46 @@ async function main() {
 				const taskStart = Date.now();
 				let streamingActive = false;
 				let toolStepCount = 0;
+				let taskResult = null;
 
-				const onFinalToken = (event) => {
-					if (event.type === "start") {
-						spinner.stop();
-						streamingActive = true;
-						process.stdout.write("\n");
+				for await (const event of queryEngine.runTask(task, history)) {
+					if (event.type === "stream_start") {
+						if (!streamingActive) {
+							spinner.stop();
+							streamingActive = true;
+							process.stdout.write("\n");
+						}
 					} else if (event.type === "token") {
 						process.stdout.write(event.value);
+					} else if (event.type === "tool_call") {
+						if (process.stdout.isTTY) {
+							toolStepCount++;
+							spinner.update(
+								`${formatToolLabel(event.tool, event.args)} (${toolStepCount})`,
+							);
+						}
+					} else if (event.type === "tool_result") {
+						if (!event.result?.ok && process.stdout.isTTY) {
+							spinner.stop();
+							const errSnippet = String(event.result?.error || "failed")
+								.split("\n")[0]
+								.slice(0, 80);
+							console.log(
+								`${C.red}  ✗ ${formatToolLabel(event.tool, event.args)}: ${errSnippet}${C.reset}`,
+							);
+							spinner.start("retrying");
+						} else if (
+							event.tool === "FileEditTool" ||
+							event.tool === "FileWriteTool"
+						) {
+							spinner.stop();
+							renderEditDiff(event.tool, event.args, event.result);
+							spinner.start(formatToolLabel(event.tool, event.args));
+						}
+					} else if (event.type === "done") {
+						taskResult = event;
 					}
-				};
-
-				const onToolCall = (toolName, args) => {
-					if (!process.stdout.isTTY) return;
-					toolStepCount++;
-					const label = formatToolLabel(toolName, args);
-					spinner.update(`${label} (${toolStepCount})`);
-				};
-
-				const onToolResult = (toolName, args, result) => {
-					if (!result?.ok && process.stdout.isTTY) {
-						spinner.stop();
-						const errSnippet = String(result?.error || "failed")
-							.split("\n")[0]
-							.slice(0, 80);
-						console.log(
-							`${C.red}  ✗ ${formatToolLabel(toolName, args)}: ${errSnippet}${C.reset}`,
-						);
-						spinner.start("retrying");
-						return;
-					}
-					if (toolName === "FileEditTool" || toolName === "FileWriteTool") {
-						spinner.stop();
-						renderEditDiff(toolName, args, result);
-						spinner.start(formatToolLabel(toolName, args));
-					}
-				};
-
-				const taskResult = await queryEngine.runTask(task, history, {
-					onFinalToken,
-					onToolCall,
-					onToolResult,
-				});
+				}
 				const elapsed = Date.now() - taskStart;
 				spinner.stop();
 
