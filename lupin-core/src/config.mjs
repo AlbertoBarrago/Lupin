@@ -1,6 +1,6 @@
 /** @module config */
 
-import path from 'node:path'
+import path from "node:path";
 
 /**
  * Parses the process argument vector for a `--project-root` or `--workspace`
@@ -14,21 +14,21 @@ import path from 'node:path'
  *   absent or has no value.
  */
 function resolveCliProjectRootArg(argv = process.argv.slice(2)) {
-  for (let index = 0; index < argv.length; index += 1) {
-    const value = String(argv[index] || '').trim()
-    if (!value) continue
-    if (value === '--project-root' || value === '--workspace') {
-      const next = String(argv[index + 1] || '').trim()
-      if (next) return next
-    }
-    if (value.startsWith('--project-root=')) {
-      return value.slice('--project-root='.length).trim()
-    }
-    if (value.startsWith('--workspace=')) {
-      return value.slice('--workspace='.length).trim()
-    }
-  }
-  return ''
+	for (let index = 0; index < argv.length; index += 1) {
+		const value = String(argv[index] || "").trim();
+		if (!value) continue;
+		if (value === "--project-root" || value === "--workspace") {
+			const next = String(argv[index + 1] || "").trim();
+			if (next) return next;
+		}
+		if (value.startsWith("--project-root=")) {
+			return value.slice("--project-root=".length).trim();
+		}
+		if (value.startsWith("--workspace=")) {
+			return value.slice("--workspace=".length).trim();
+		}
+	}
+	return "";
 }
 
 /**
@@ -44,21 +44,21 @@ function resolveCliProjectRootArg(argv = process.argv.slice(2)) {
  * @returns {string} Absolute path to the inferred project root.
  */
 function inferProjectRoot() {
-  const cwd = process.cwd()
-  const cliProjectRoot = resolveCliProjectRootArg()
-  if (cliProjectRoot) {
-    return path.resolve(cwd, cliProjectRoot)
-  }
+	const cwd = process.cwd();
+	const cliProjectRoot = resolveCliProjectRootArg();
+	if (cliProjectRoot) {
+		return path.resolve(cwd, cliProjectRoot);
+	}
 
-  const initCwd = String(process.env.INIT_CWD || '').trim()
-  if (initCwd && initCwd !== cwd) {
-    return path.resolve(initCwd)
-  }
+	const initCwd = String(process.env.INIT_CWD || "").trim();
+	if (initCwd && initCwd !== cwd) {
+		return path.resolve(initCwd);
+	}
 
-  if (path.basename(cwd) === 'restore-core') {
-    return path.resolve(cwd, '..')
-  }
-  return cwd
+	if (path.basename(cwd) === "restore-core") {
+		return path.resolve(cwd, "..");
+	}
+	return cwd;
 }
 
 /**
@@ -84,20 +84,20 @@ function inferProjectRoot() {
  * }} The merged configuration object.
  */
 export function loadConfig() {
-  return {
-    projectRoot: process.env.AGENT_PROJECT_ROOT || inferProjectRoot(),
-    ollama: {
-      baseUrl: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
-      model: process.env.OLLAMA_MODEL || 'qwen2.5-coder:7b',
-      timeoutMs: Number.parseInt(process.env.OLLAMA_TIMEOUT_MS || '60000', 10),
-    },
-    agent: {
-      maxSteps: Number.parseInt(process.env.AGENT_MAX_STEPS || '30', 10),
-      maxHistory: Number.parseInt(process.env.AGENT_MAX_HISTORY || '16', 10),
-    },
-    security: {
-      denyDangerousBash: process.env.AGENT_DENY_DANGEROUS_BASH !== '0',
-    },
-    debug: process.env.DEBUG === '1',
-  }
+	return {
+		projectRoot: process.env.AGENT_PROJECT_ROOT || inferProjectRoot(),
+		ollama: {
+			baseUrl: process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434",
+			model: process.env.OLLAMA_MODEL || "qwen2.5-coder:7b",
+			timeoutMs: Number.parseInt(process.env.OLLAMA_TIMEOUT_MS || "60000", 10),
+		},
+		agent: {
+			maxSteps: Number.parseInt(process.env.AGENT_MAX_STEPS || "30", 10),
+			maxHistory: Number.parseInt(process.env.AGENT_MAX_HISTORY || "16", 10),
+		},
+		security: {
+			denyDangerousBash: process.env.AGENT_DENY_DANGEROUS_BASH !== "0",
+		},
+		debug: process.env.DEBUG === "1",
+	};
 }

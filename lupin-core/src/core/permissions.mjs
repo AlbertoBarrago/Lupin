@@ -14,13 +14,13 @@
  * @type {RegExp[]}
  */
 const DANGEROUS_BASH_PATTERNS = [
-  /\brm\s+-rf\b/i,
-  /\bsudo\b/i,
-  /\bmkfs\b/i,
-  /\bdd\s+if=/i,
-  /\bgit\s+reset\s+--hard\b/i,
-  /\bgit\s+checkout\s+--\b/i,
-  />\s*\/dev\/sd[a-z]/i,
+	/\brm\s+-rf\b/i,
+	/\bsudo\b/i,
+	/\bmkfs\b/i,
+	/\bdd\s+if=/i,
+	/\bgit\s+reset\s+--hard\b/i,
+	/\bgit\s+checkout\s+--\b/i,
+	/>\s*\/dev\/sd[a-z]/i,
 ];
 
 /**
@@ -36,27 +36,27 @@ const DANGEROUS_BASH_PATTERNS = [
  * @returns {'LOW' | 'MEDIUM' | 'HIGH'} The risk level assigned to the tool.
  */
 export function classifyRisk(toolName) {
-  if (
-    toolName === "FileReadTool" ||
-    toolName === "FileBatchReadTool" ||
-    toolName === "GlobTool" ||
-    toolName === "GrepTool" ||
-    toolName === "WebSearchTool" ||
-    toolName === "WebFetchTool"
-  ) {
-    return "LOW";
-  }
-  if (
-    toolName === "FileWriteTool" ||
-    toolName === "FileEditTool" ||
-    toolName === "FileDeleteTool"
-  ) {
-    return "MEDIUM";
-  }
-  if (toolName === "BashTool") {
-    return "HIGH";
-  }
-  return "MEDIUM";
+	if (
+		toolName === "FileReadTool" ||
+		toolName === "FileBatchReadTool" ||
+		toolName === "GlobTool" ||
+		toolName === "GrepTool" ||
+		toolName === "WebSearchTool" ||
+		toolName === "WebFetchTool"
+	) {
+		return "LOW";
+	}
+	if (
+		toolName === "FileWriteTool" ||
+		toolName === "FileEditTool" ||
+		toolName === "FileDeleteTool"
+	) {
+		return "MEDIUM";
+	}
+	if (toolName === "BashTool") {
+		return "HIGH";
+	}
+	return "MEDIUM";
 }
 
 /**
@@ -83,11 +83,11 @@ export function classifyRisk(toolName) {
  * @returns {string} Equivalent regex string.
  */
 function globToRegex(glob) {
-  return glob
-    .replace(/\./g, "\\.")
-    .replace(/\{([^}]+)\}/g, (_, g) => `(${g.split(",").join("|")})`)
-    .replace(/\*/g, ".*")
-    .replace(/\?/g, ".");
+	return glob
+		.replace(/\./g, "\\.")
+		.replace(/\{([^}]+)\}/g, (_, g) => `(${g.split(",").join("|")})`)
+		.replace(/\*/g, ".*")
+		.replace(/\?/g, ".");
 }
 
 /**
@@ -107,83 +107,83 @@ function globToRegex(glob) {
  *   A redirect descriptor, or `null` if no redirect applies.
  */
 export function redirectBashToTool(command) {
-  const cmd = String(command || "").trim();
+	const cmd = String(command || "").trim();
 
-  // cat <single-file>  (no pipes, no redirects, no multiple args)
-  // Handles: cat file.js  cat ./path  cat 'file with spaces.txt'  cat "quoted.js"
-  const catMatch =
-    cmd.match(/^cat\s+'([^']+)'$/) ||
-    cmd.match(/^cat\s+"([^"]+)"$/) ||
-    cmd.match(/^cat\s+([^\s|&;><'"]+)$/);
-  if (catMatch) {
-    return {
-      tool: "FileReadTool",
-      args: { path: catMatch[1] },
-      note: "redirected: cat → FileReadTool (prefer FileReadTool directly)",
-    };
-  }
+	// cat <single-file>  (no pipes, no redirects, no multiple args)
+	// Handles: cat file.js  cat ./path  cat 'file with spaces.txt'  cat "quoted.js"
+	const catMatch =
+		cmd.match(/^cat\s+'([^']+)'$/) ||
+		cmd.match(/^cat\s+"([^"]+)"$/) ||
+		cmd.match(/^cat\s+([^\s|&;><'"]+)$/);
+	if (catMatch) {
+		return {
+			tool: "FileReadTool",
+			args: { path: catMatch[1] },
+			note: "redirected: cat → FileReadTool (prefer FileReadTool directly)",
+		};
+	}
 
-  // ls [-flags] [dir]
-  const lsMatch = cmd.match(
-    /^ls(?:\s+-[a-zA-Z]+)?\s*(['"]?)([^\s|&;><'"]*)\1$/,
-  );
-  if (lsMatch) {
-    const dir = (lsMatch[2] || "").replace(/\/$/, "");
-    const pattern = dir ? `^${dir}/[^/]+` : "^[^/]+";
-    return {
-      tool: "GlobTool",
-      args: { pattern },
-      note: "redirected: ls → GlobTool (prefer GlobTool directly)",
-    };
-  }
+	// ls [-flags] [dir]
+	const lsMatch = cmd.match(
+		/^ls(?:\s+-[a-zA-Z]+)?\s*(['"]?)([^\s|&;><'"]*)\1$/,
+	);
+	if (lsMatch) {
+		const dir = (lsMatch[2] || "").replace(/\/$/, "");
+		const pattern = dir ? `^${dir}/[^/]+` : "^[^/]+";
+		return {
+			tool: "GlobTool",
+			args: { pattern },
+			note: "redirected: ls → GlobTool (prefer GlobTool directly)",
+		};
+	}
 
-  // find <dir> -name "pattern"  (simple single -name predicate)
-  const findMatch = cmd.match(
-    /^find\s+([^\s]+)\s+.*?-name\s+["']?([^"'\s;|&>]+)["']?/,
-  );
-  if (findMatch) {
-    return {
-      tool: "GlobTool",
-      args: { pattern: globToRegex(findMatch[2]) },
-      note: "redirected: find -name → GlobTool (prefer GlobTool directly)",
-    };
-  }
+	// find <dir> -name "pattern"  (simple single -name predicate)
+	const findMatch = cmd.match(
+		/^find\s+([^\s]+)\s+.*?-name\s+["']?([^"'\s;|&>]+)["']?/,
+	);
+	if (findMatch) {
+		return {
+			tool: "GlobTool",
+			args: { pattern: globToRegex(findMatch[2]) },
+			note: "redirected: find -name → GlobTool (prefer GlobTool directly)",
+		};
+	}
 
-  // grep [-flags] "pattern" [path]  (no pipes)
-  // Covers: grep -r "foo" src/, grep -rn pattern ., grep "pattern" file.js
-  const grepMatch = cmd.match(
-    /^grep\s+((?:-\w+\s+)*)["']?([^"'\s|&;><]+)["']?\s*([^\s|&;><]*)$/,
-  );
-  if (grepMatch) {
-    const pattern = grepMatch[2];
-    const rawPath = (grepMatch[3] || "").trim();
-    const args = { pattern };
-    if (rawPath && rawPath !== ".") args.path = rawPath;
-    return {
-      tool: "GrepTool",
-      args,
-      note: "redirected: grep → GrepTool (prefer GrepTool directly)",
-    };
-  }
+	// grep [-flags] "pattern" [path]  (no pipes)
+	// Covers: grep -r "foo" src/, grep -rn pattern ., grep "pattern" file.js
+	const grepMatch = cmd.match(
+		/^grep\s+((?:-\w+\s+)*)["']?([^"'\s|&;><]+)["']?\s*([^\s|&;><]*)$/,
+	);
+	if (grepMatch) {
+		const pattern = grepMatch[2];
+		const rawPath = (grepMatch[3] || "").trim();
+		const args = { pattern };
+		if (rawPath && rawPath !== ".") args.path = rawPath;
+		return {
+			tool: "GrepTool",
+			args,
+			note: "redirected: grep → GrepTool (prefer GrepTool directly)",
+		};
+	}
 
-  return null;
+	return null;
 }
 
 export function enforcePolicy(toolName, args, securityConfig) {
-  const risk = classifyRisk(toolName);
-  if (toolName === "BashTool" && securityConfig.denyDangerousBash) {
-    const command = String(args?.command || "");
-    const blocked = DANGEROUS_BASH_PATTERNS.find((pattern) =>
-      pattern.test(command),
-    );
-    if (blocked) {
-      return {
-        allowed: false,
-        risk,
-        reason: "command blocked by security policy",
-      };
-    }
-  }
+	const risk = classifyRisk(toolName);
+	if (toolName === "BashTool" && securityConfig.denyDangerousBash) {
+		const command = String(args?.command || "");
+		const blocked = DANGEROUS_BASH_PATTERNS.find((pattern) =>
+			pattern.test(command),
+		);
+		if (blocked) {
+			return {
+				allowed: false,
+				risk,
+				reason: "command blocked by security policy",
+			};
+		}
+	}
 
-  return { allowed: true, risk };
+	return { allowed: true, risk };
 }
