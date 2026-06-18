@@ -39,7 +39,6 @@ lupin-core/src/
     sessionStore.mjs          Persists chat + tool history per session to disk
 
 CLAUDE.md                     Agent instruction file (read by coding agents working in this repo)
-TODO.md                       Current product direction and known gaps
 package.json                  Root scripts pointing into lupin-core
 ```
 
@@ -116,15 +115,9 @@ npm run start:debug
 
 `ToolRuntime` also transparently redirects common bash-as-read patterns (`cat`, `ls`, `find -name`, `grep`) to their native tool equivalents before touching the shell.
 
-### Mode dispatch (`index.mjs`)
+### CLI dispatch (`index.mjs`)
 
-| Mode | Behaviour |
-|---|---|
-| `code` (default) | All non-command input runs through `QueryEngine.runTask()` with full tool loop |
-| `chat` | Straight model chat via `runChatReply()` — no tool loop |
-| `auto` | Routes by `detectCodingIntent()` keyword heuristic |
-
-Switch at runtime: `/mode <code|chat|auto>`
+All non-command input runs through `QueryEngine.runTask()` with the full tool loop. Slash commands bypass the model and call local handlers directly.
 
 ### Workspace context (`workspaceContext.mjs`)
 
@@ -146,13 +139,16 @@ Injected into every system prompt and consumed by `/init` when generating `LUPIN
 | `/init` | Generate `LUPIN.md` from a workspace snapshot |
 | `/refresh` | Rebuild workspace context |
 | `/model <name>` | Switch Ollama model mid-session |
-| `/mode <code\|chat\|auto>` | Switch agent mode |
 | `/read <path>` | Read a file directly |
-| `/find <glob>` | Run a glob search |
-| `/grep <pattern> [path]` | Run a grep search |
+| `/files [regex]` | List workspace files, optionally filtered by JavaScript regex |
+| `/grep <pattern> [--path p]` | Run a grep search |
 | `/bash <command>` | Run a shell command |
 | `/status` | Show current config and context state |
-| `/clear` | Clear session history |
+| `/context` | Show repo context and loaded instruction files |
+| `/health` | Check Ollama connectivity |
+| `/debug` | Show tool calls, files, and token stats from last task |
+| `/code <task>` | Run a task explicitly |
+| `/clear` | Clear the terminal screen |
 | `/exit` | Quit |
 
 ---

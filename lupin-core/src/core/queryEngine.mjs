@@ -711,7 +711,7 @@ export class QueryEngine {
 					result?.ok
 				) {
 					hasEditedFiles = true;
-					hasVerifiedChanges = true; // tool already verified: read → patch → write internally
+					hasVerifiedChanges = false;
 					if (result.result?.path) {
 						changedFiles.add(String(result.result.path));
 					}

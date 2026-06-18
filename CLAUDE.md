@@ -9,7 +9,6 @@ Lupin is a repo-aware local coding agent CLI backed by Ollama. The only runnable
 ## Running
 
 ```bash
-cd lupin-core
 npm run start
 # or directly:
 node lupin-core/src/index.mjs
@@ -78,11 +77,9 @@ lupin-core/src/
 3. On tool call: runs via `ToolRuntime.execute()`, appends result as next user message
 4. Enforces workflow guards: implementation tasks must inspect before editing, and verify after editing, or the loop pushes back with `WORKFLOW_ERROR`
 
-### Mode dispatch (index.mjs)
+### CLI dispatch (index.mjs)
 
-- `code` (default): all non-command input runs through `QueryEngine.runTask()`
-- `chat`: uses `runChatReply()` — straight model chat, no tool loop
-- `auto`: routes by `detectCodingIntent()` keyword heuristic
+All non-command input runs through `QueryEngine.runTask()`. Slash commands bypass the model and call local handlers directly.
 
 ### Workspace context
 

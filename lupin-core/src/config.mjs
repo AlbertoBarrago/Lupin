@@ -38,7 +38,7 @@ function resolveCliProjectRootArg(argv = process.argv.slice(2)) {
  * 2. The `INIT_CWD` environment variable (set by npm/yarn when running scripts
  *    from a subdirectory).
  * 3. A heuristic that walks one level up when the current directory is named
- *    `restore-core` (guards against being run from inside the package itself).
+ *    `lupin-core` (guards against being run from inside the package itself).
  * 4. `process.cwd()` as the final fallback.
  *
  * @returns {string} Absolute path to the inferred project root.
@@ -55,7 +55,7 @@ function inferProjectRoot() {
 		return path.resolve(initCwd);
 	}
 
-	if (path.basename(cwd) === "restore-core") {
+	if (path.basename(cwd) === "lupin-core") {
 		return path.resolve(cwd, "..");
 	}
 	return cwd;
